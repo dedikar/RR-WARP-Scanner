@@ -1,0 +1,17 @@
+# Build artifacts
+build/
+backup*/
+backup_*/
+*.ipk
+*.tgz
+*.tar.gz
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Temp backups kept alongside source
+scan.js.backup_*

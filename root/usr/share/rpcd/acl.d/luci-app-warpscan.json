@@ -1,0 +1,17 @@
+{
+	"luci-app-warpscan": {
+		"description": "Grant access to the WARP endpoint scanner",
+		"read": {
+			"ubus": {
+				"luci.warpscan": [ "accountStatus", "confBase", "scanStatus", "scanResult", "scanLog" ]
+			},
+			"uci": [ "network" ]
+		},
+		"write": {
+			"ubus": {
+				"luci.warpscan": [ "register", "scanStart", "applyBest" ]
+			},
+			"uci": [ "network" ]
+		}
+	}
+}

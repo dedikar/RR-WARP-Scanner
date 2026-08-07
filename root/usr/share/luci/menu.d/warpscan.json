@@ -1,0 +1,13 @@
+{
+	"admin/services/warpscan": {
+		"title": "WARP Scanner",
+		"order": 80,
+		"action": {
+			"type": "view",
+			"path": "warpscan/scan"
+		},
+		"depends": {
+			"acl": [ "luci-app-warpscan" ]
+		}
+	}
+}

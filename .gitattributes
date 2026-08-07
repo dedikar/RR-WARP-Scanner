@@ -1,0 +1,12 @@
+* text=auto
+
+# Shell scripts and ipk/uci payloads must stay LF
+*.sh text eol=lf
+*.ucode text eol=lf
+root/usr/libexec/warpscan/wscan.sh text eol=lf
+root/usr/libexec/warpscan/wregister.sh text eol=lf
+root/usr/share/rpcd/ucode/* text eol=lf
+*.json text eol=lf
+*.js text eol=lf
+build.sh text eol=lf
+Makefile text eol=lf
