@@ -232,9 +232,13 @@ scanStatus: {
 			const items = [];
 			let updated = null;
 			for (let i = 0; i < length(lines); i++) {
-				const m = match(lines[i], /^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)$/);
+				// ep node country rtt tun_rtt tun_loss torn(1=down)
+				const m = match(lines[i], /^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)$/);
 				if (m)
-					push(items, { endpoint: m[1], node: m[2], country: m[3], ping: m[4] });
+					push(items, {
+						endpoint: m[1], node: m[2], country: m[3], ping: m[4],
+						tun_ping: m[5], tun_loss: m[6], torn: m[7] == '1'
+					});
 			}
 			try {
 				const st = stat(src);
@@ -252,8 +256,17 @@ scanStatus: {
 			const res = read_file(RESULT);
 			if (!res)
 				return { error: 'no results' };
-			const best = split(rtrim(res, '\n'), '\n')[0];
-			const m = match(best, /^(\d+\.\d+\.\d+\.\d+):(\d+)\s+(\S+)\s+(\S+)\s+(\S+)$/);
+			const lines = split(rtrim(res, '\n'), '\n');
+			let best = null;
+			for (let i = 0; i < length(lines); i++) {
+				if (length(split(lines[i], ' ')) >= 7 && split(lines[i], ' ')[6] == '1')
+					continue; // skip torn-down endpoints
+				best = lines[i];
+				break;
+			}
+			if (!best)
+				return { error: 'no working endpoints' };
+			const m = match(best, /^(\d+\.\d+\.\d+\.\d+):(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)$/);
 			if (!m)
 				return { error: `cannot parse: ${best}` };
 			const endpoint_host = m[1], endpoint_port = m[2], node = m[3], country = m[4];

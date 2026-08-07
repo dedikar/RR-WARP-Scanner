@@ -138,12 +138,16 @@ function renderTable(results, updated, saved) {
 	}
 
 	if (results.length) {
-		var best = results[0].endpoint;
+		var best = null;
+		for (var bi = 0; bi < results.length; bi++) {
+			if (!results[bi].torn) { best = results[bi].endpoint; break; }
+		}
 		var topBar = E('div', { 'style': 'display:flex; align-items:center; flex-wrap:wrap; margin:8px 0' });
 		box.appendChild(topBar);
 
 		var bestBtn = E('button', { 'class': 'btn cbi-button cbi-button-apply', 'type': 'button' },
-			'Скопировать лучший .conf (' + best + ')');
+			best ? 'Скопировать лучший .conf (' + best + ')' : 'Нет рабочих эндпоинтов');
+		bestBtn.disabled = !best;
 		bestBtn.addEventListener('click', function() {
 			if (!confData) { statusLine(statusElCurrent, 'Нет параметров конфига', true); return; }
 			copyToClipboard(makeConf(confData, best), bestBtn);
@@ -184,12 +188,17 @@ function renderTable(results, updated, saved) {
 	// a simple block list (not a wide table) so the buttons are always visible.
 	for (var i = 0; i < results.length; i++) {
 		var r = results[i];
-		var row = E('div', { 'class': 'cbi-section', 'style': 'display:flex; align-items:center; flex-wrap:wrap; margin:4px 0; padding:6px 8px; border:1px solid #444; border-radius:4px' });
+		var row = E('div', { 'class': 'cbi-section', 'style': 'display:flex; align-items:center; flex-wrap:wrap; margin:4px 0; padding:6px 8px; border:1px solid ' + (r.torn ? '#a33' : '#444') + '; border-radius:4px;' + (r.torn ? 'opacity:.7' : '') });
 		var ep = E('code', { 'style': 'flex:1 1 auto; min-width:150px; word-break:break-all' }, r.endpoint);
 		row.appendChild(ep);
-		row.appendChild(E('span', { 'class': 'text-muted', 'style': 'margin:0 8px' },
-			(r.node || '') + ' ' + (r.country || '') + (r.ping != null ? ' ' + r.ping + ' ms' : '')));
-		if (i == 0)
+		var detail = (r.node || '') + ' ' + (r.country || '') +
+			(r.ping != null ? ' ' + r.ping + ' ms' : '') +
+			(r.tun_ping && r.tun_ping != '?' ? ' | туннель ' + r.tun_ping + ' мс' : '') +
+			(r.tun_loss && r.tun_loss != '?' ? ', потеря ' + r.tun_loss + '%' : '');
+		row.appendChild(E('span', { 'class': 'text-muted', 'style': 'margin:0 8px' }, detail));
+		if (r.torn)
+			row.appendChild(E('span', { 'class': 'label label-negative', 'style': 'margin:0 8px' }, 'TORN'));
+		if (i == 0 && !r.torn)
 			row.appendChild(E('span', { 'class': 'label label-success' }, 'BEST'));
 		var btn = E('button', { 'class': 'btn cbi-button cbi-button-apply', 'type': 'button' }, 'Скопировать .conf');
 		btn.addEventListener('click', function(endpoint, that) {

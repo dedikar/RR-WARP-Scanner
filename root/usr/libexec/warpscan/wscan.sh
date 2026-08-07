@@ -18,6 +18,8 @@ COUNTRY=""
 NODE=""
 ACCOUNT="/etc/warpscan-account.json"
 OUT="/tmp/wscan_result.txt"
+TUN_PING_C=5      # echo burst size inside the tunnel (for TUN PING / LOSS)
+TEAR_RUN=2        # trailing lost echoes >= this => endpoint marked "torn down"
 
 usage() { echo "usage: wscan.sh [-w iface] [-n N] [-t sec] [-j N] [-p ports] [-c country] [-node NODE] [-o file] [-f]" >&2; exit 1; }
 FULL=0
@@ -93,6 +95,29 @@ host_rtt() {
   [ -n "$ms" ] && echo "$ms"
 }
 
+# TUN PING + LOSS: burst of ICMP to 1.1.1.1 THROUGH the tunnel on IPLOCAL.
+# echoes "rtt_ms loss_pct torn" where torn=1 if a trailing run of >= TEAR_RUN
+# echoes is lost (DPI cut the tunnel mid-stream) - endpoints like that are the
+# "torn down" set from warpScout and are never picked as best.
+tun_probe() {
+  local IPLOCAL="$1" out rtt=0 maxr=0 loss=0 torn=0 recv=0 n=0
+  out=$(ping -c "$TUN_PING_C" -W 1 -I "$IPLOCAL" 1.1.1.1 2>/dev/null)
+  [ -n "$out" ] || return 1
+  # received count + last received seq (busybox prints "seq=N", not icmp_seq=)
+  recv=$(echo "$out" | grep -c ' 1.1.1.1: ' 2>/dev/null)
+  lastseq=$(echo "$out" | sed -n 's/.*[= ]seq=\([0-9]*\).*/\1/p' | tail -1)
+  [ -z "$lastseq" ] && lastseq=0
+  # avg of the round-trip times
+  rtt=$(echo "$out" | sed -n 's/.*time=\([0-9.]*\) ms.*/\1/p' | awk '{s+=$1;n++} END{if(n>0)printf "%.1f",s/n}')
+  loss=$(( 100 - 100*recv/TUN_PING_C ))
+  # torn-down: we stopped answering before the end of the burst
+  if [ "$lastseq" -lt "$TUN_PING_C" ] && [ $((TUN_PING_C - lastseq)) -ge $TEAR_RUN ]; then
+    torn=1
+  fi
+  [ -n "$rtt" ] || rtt=0
+  echo "$rtt $loss $torn"
+}
+
 trace_meta() {
   # returns "colo|loc" - endpoint exit node + country (via WARP exit, account-bound)
   local r colo loc IPLOCAL="$1"
@@ -129,7 +154,7 @@ worker() {
     done
   done < "$hostfile"
 
-  # ---- worker phase 2: honest RTT + meta for its survivors ----
+  # ---- worker phase 2: honest RTT + meta + in-tunnel probe for its survivors ----
   echo "phase2" > $PROGRESS
   while read ep; do
     [ -z "$ep" ] && continue
@@ -160,7 +185,18 @@ worker() {
       loc=$(echo "$meta" | cut -d'|' -f2)
       [ -n "$COUNTRY" ] && [ "$loc" != "$COUNTRY" ] && continue
       [ -n "$NODE" ] && [ "$colo" != "$NODE" ] && continue
-      echo "$ep $colo $loc ${rtt}" >> "$OUT"
+      # in-tunnel burst: TUN PING, LOSS, torn-down detection
+      tp=$(tun_probe "$IPLOCAL")
+      if [ -n "$tp" ]; then
+        tprtt=$(echo "$tp" | cut -d' ' -f1)
+        tploss=$(echo "$tp" | cut -d' ' -f2)
+        tptorn=$(echo "$tp" | cut -d' ' -f3)
+      else
+        tprtt="?"
+        tploss="?"
+        tptorn="?"
+      fi
+      echo "$ep $colo $loc ${rtt} ${tprtt} ${tploss} ${tptorn}" >> "$OUT"
     fi
   done < "$alivefile"
 
@@ -223,11 +259,14 @@ while [ $w -lt $JOBS ]; do
 done
 wait
 
-# collect survivors + sort by ping
+# collect survivors + sort by ping (torn-down endpoints sink to the bottom,
+# matching warpScout: they are shown, but never picked as best)
 cat /tmp/wscan/alive.*.txt 2>/dev/null > /tmp/wscan/alive.txt
 ALIVE=$(wc -l < /tmp/wscan/alive.txt)
 if [ -s "$OUT" ]; then
-  awk '{print $4, $0}' "$OUT" | sort -n | awk '{ $1=""; print substr($0,2) }' > /tmp/wscan_result_sorted.txt
+  # field order: ep colo loc rtt tun_rtt tun_loss torn (1 = torn down)
+  awk '{key=($7=="1"?"1":"0")" "$4" "; print key $0}' "$OUT" \
+    | sort -n | sed 's/^[01] [0-9.]* //' > /tmp/wscan_result_sorted.txt
   mv /tmp/wscan_result_sorted.txt "$OUT"
 fi
 echo "done" > $PROGRESS
