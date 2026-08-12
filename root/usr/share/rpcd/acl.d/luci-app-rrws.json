@@ -1,0 +1,17 @@
+{
+	"luci-app-rrws": {
+		"description": "Grant access to the WARP endpoint scanner",
+		"read": {
+			"ubus": {
+				"luci.rrws": [ "accountStatus", "confBase", "version", "scanStatus", "scanResult", "scanLog", "getSettings", "speedAvailable", "speedStatus", "speedResult", "speedLog", "registerLog" ]
+			},
+			"uci": [ "network" ]
+		},
+		"write": {
+			"ubus": {
+				"luci.rrws": [ "register", "renewAccount", "deleteAccount", "scanStart", "scanStop", "applyBest", "saveSettings", "speedStart", "speedStop", "scanLogClear" ]
+			},
+			"uci": [ "network" ]
+		}
+	}
+}

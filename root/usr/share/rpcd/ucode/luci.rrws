@@ -1,0 +1,647 @@
+// RRWS (RouteRich WARP Scanner) LuCI backend - rpcd/ucode
+// Scans Cloudflare WARP endpoints via kernel AmneziaWG, applies best result.
+
+'use strict';
+
+import { popen, readfile, writefile, stat } from 'fs';
+
+const BIN_DIR = '/usr/bin';
+const ACCOUNT = '/etc/rrws-account.json';
+const RESULT = '/tmp/wscan_result.txt';
+const RESULT_SAVED = '/etc/rrws-last-result.txt';
+const ALIVE = '/tmp/wscan/alive.txt';
+const PID = '/tmp/wscan/pid';
+const PROGRESS = '/tmp/wscan/progress';
+const RPCLOG = '/tmp/rrws.rpc.log';
+const SETTINGS = '/etc/rrws-settings.json';
+const SPD_RESULT = '/tmp/wsspeed_result.txt';
+const SPD_PROGRESS = '/tmp/wsspeed/progress';
+const SPD_PID = '/tmp/wsspeed/pid';
+const SPD_LOG = '/tmp/wsspeed.log';
+const REG_LOG = '/tmp/rrws-register.log';
+const REG_MARK = '/tmp/rrws-registering';
+// full sweep cap: 17 subnets x 254 octets covers the whole WARP pool
+const HOSTS_MAX = 4318;
+// worker ceiling: wgscanN IPs are 172.16.7.(2+w), .200 is taken by wgspeed
+const JOBS_MAX = 70;
+// scan pool, must match wscan.sh SUBNETS; used to validate -x excludes
+const SUBNETS = [ '8.6.112', '8.34.70', '8.34.146', '8.35.211', '8.39.125', '8.39.204', '8.39.214', '8.47.69', '162.159.192', '162.159.193', '162.159.195', '162.159.197', '162.159.204', '188.114.96', '188.114.97', '188.114.98', '188.114.99' ];
+
+function command(cmd) {
+	return trim(popen(cmd)?.read?.('all'));
+}
+
+// safe int: ucode's int('') is NaN, and NaN serializes to invalid JSON
+// ("nan") which breaks the browser's JSON.parse. empty/missing values -> 0.
+function to_int(v) {
+	const n = int(v);
+	return n == n ? n : 0;
+}
+
+function read_file(p) {
+	try { return readfile(p); } catch (e) { return null; }
+}
+
+function file_exists(p) {
+	return stat(p) != null;
+}
+
+function valid_subnets(list) {
+	let out = [];
+	for (let i = 0; i < length(list); i++) {
+		const s = trim(list[i] ?? '');
+		if (!s) continue;
+		let known = false;
+		for (let j = 0; j < length(SUBNETS); j++)
+			if (SUBNETS[j] == s) { known = true; break; }
+		if (!known) continue;
+		let dup = false;
+		for (let j = 0; j < length(out); j++)
+			if (out[j] == s) { dup = true; break; }
+		if (!dup)
+			push(out, s);
+	}
+	return out;
+}
+
+function shellquote(s) {
+	return `'${replace(s ?? '', "'", "'\\''")}'`;
+}
+
+function join_list(list, sep) {
+	let out = '';
+	for (let i = 0; i < length(list); i++)
+		out += (i ? sep : '') + list[i];
+	return out;
+}
+
+function rpclog(method, extra) {
+	try {
+		const ts = trim(command('date +%Y-%m-%d_%H:%M:%S'));
+		const line = `${ts} ${method} ${extra ?? ''}\n`;
+		let cur = read_file(RPCLOG) ?? '';
+		if (length(cur) > 32768)
+			cur = substr(cur, length(cur) - 32768);
+		writefile(RPCLOG, cur + line);
+	} catch (e) {}
+}
+
+function jq_field(p, key) {
+	return trim(command(`jq -r '.${key}' ${shellquote(p)} 2>/dev/null`)) ?? '';
+}
+
+function account_status() {
+	if (!file_exists(ACCOUNT))
+		return { registered: false };
+	const id = jq_field(ACCOUNT, 'id');
+	const peer = jq_field(ACCOUNT, 'peer_public_key');
+	const addr = jq_field(ACCOUNT, 'address');
+	const priv = jq_field(ACCOUNT, 'private_key');
+	if (!id)
+		return { registered: false };
+	return { registered: true, id, peer_public_key: peer, address: addr, private_key: priv };
+}
+
+function uci_get(sel) {
+	return trim(command(`uci get ${sel} 2>/dev/null`)) ?? '';
+}
+
+// base parameters to build an AmneziaWG .conf for an imported endpoint.
+// pulled from the existing warp interface so Jc/Jmin/Jmax/I1 match it;
+// on a clean router (no network.warp) the same defaults warpscout uses,
+// so the config survives DPI without any manual setup.
+function conf_base() {
+	const acct = account_status();
+	const addr = uci_get('network.warp.addresses');
+	const priv = uci_get('network.warp.private_key');
+	const peer = uci_get('network.warp_peer.public_key');
+	const I1_DEFAULT = '<r 2><b 0x858000010001000000000669636c6f756403636f6d0000010001c00c000100010000105a00044d583737>';
+	// the registered account is the source of truth for .conf keys: a peer
+	// copied to a client must pair with THIS account, not with whatever the
+	// router's own interface happens to use.
+	return {
+		registered: acct.registered,
+		address: acct.address ? acct.address + '/32' : (addr || '172.16.0.2/32'),
+		private_key: acct.private_key || priv,
+		peer_public_key: acct.peer_public_key || peer,
+		jc: uci_get('network.warp.awg_jc') || '6',
+		jmin: uci_get('network.warp.awg_jmin') || '10',
+		jmax: uci_get('network.warp.awg_jmax') || '50',
+		s1: uci_get('network.warp.awg_s1') || '0',
+		s2: uci_get('network.warp.awg_s2') || '0',
+		s3: uci_get('network.warp.awg_s3') || '0',
+		s4: uci_get('network.warp.awg_s4') || '0',
+		h1: uci_get('network.warp.awg_h1') || '1',
+		h2: uci_get('network.warp.awg_h2') || '2',
+		h3: uci_get('network.warp.awg_h3') || '3',
+		h4: uci_get('network.warp.awg_h4') || '4',
+		i1: uci_get('network.warp.awg_i1') || I1_DEFAULT,
+		dns: '1.1.1.1, 1.0.0.1',
+		mtu: uci_get('network.warp.mtu') || '1280',
+		keepalive: uci_get('network.warp_peer.persistent_keepalive') || '25',
+		allowed_ips: uci_get('network.warp_peer.allowed_ips') || '0.0.0.0/0'
+	};
+}
+
+function scan_running() {
+	// determine by progress marker written by wscan.sh; 'done' or missing => idle
+	const prog = trim(read_file(PROGRESS) ?? '');
+	return prog != '' && prog != 'done';
+}
+
+function speed_running() {
+	const prog = trim(read_file(SPD_PROGRESS) ?? '');
+	return prog != '' && prog != 'done';
+}
+
+// registration runs in the background (register/renew), it can take a while
+// because wregister.sh builds a bootstrap tunnel first
+function register_running() {
+	if (!file_exists(REG_MARK))
+		return false;
+	// stale marker after a crash would otherwise block forever
+	return trim(command('pgrep -f wregister.sh 2>/dev/null')) != '';
+}
+
+// how many working (non-torn) endpoints are in the freshest scan result
+function speed_available_count() {
+	if (!file_exists(RESULT) && !file_exists(RESULT_SAVED))
+		return 0;
+	const src = file_exists(RESULT) && read_file(RESULT) ? RESULT : RESULT_SAVED;
+	const raw = read_file(src) || '';
+	const lines = raw ? split(rtrim(raw, '\n'), '\n') : [];
+	let avail = 0;
+	for (let i = 0; i < length(lines); i++) {
+		const f = split(lines[i], ' ');
+		if (length(f) >= 7 && f[6] != '1')
+			avail++;
+	}
+	return avail;
+}
+
+const methods = {
+
+	accountStatus: {
+		call: function() {
+			rpclog('accountStatus');
+			const s = account_status();
+			s.registering = register_running();
+			return s;
+		}
+	},
+
+	registerLog: {
+		call: function() {
+			rpclog('registerLog');
+			const raw = read_file(REG_LOG) ?? '';
+			if (!raw)
+				return { log: '' };
+			const tail = length(raw) > 4000 ? substr(raw, length(raw) - 4000) : raw;
+			return { log: tail };
+		}
+	},
+
+	confBase: {
+		call: function() {
+			rpclog('confBase');
+			return conf_base();
+		}
+	},
+
+	version: {
+		call: function() {
+			rpclog('version');
+			// read the installed package version from opkg metadata
+			const ctrl = read_file('/usr/lib/opkg/info/luci-app-rrws.control') ?? '';
+			const lines = split(ctrl, '\n');
+			let ver = '';
+			for (let i = 0; i < length(lines); i++) {
+				const m = match(trim(lines[i]), /^Version: (.+)$/);
+				if (m) { ver = trim(m[1]); break; }
+			}
+			return { version: ver };
+		}
+	},
+
+	register: {
+		call: function() {
+			rpclog('register');
+			if (scan_running() || speed_running())
+				return { error: 'scan or speed test is running - stop it first' };
+			if (register_running())
+				return { error: 'registration already in progress' };
+			// launch detached so the ubus call returns instantly - a full
+			// registration builds a bootstrap tunnel and can take a minute,
+			// which would exceed the LuCI client's 20s rpc timeout
+			command(`setsid sh -c 'sh ${BIN_DIR}/wregister.sh > ${REG_LOG} 2>&1' < /dev/null > /dev/null 2>&1 &`);
+			writefile(REG_MARK, '1');
+			return { started: true };
+		}
+	},
+
+	deleteAccount: {
+		call: function() {
+			rpclog('deleteAccount');
+			if (scan_running() || speed_running())
+				return { error: 'scan or speed test is running - stop it first' };
+			if (register_running())
+				return { error: 'registration in progress - try again' };
+			command('rm -f ' + shellquote(ACCOUNT));
+			return { deleted: !file_exists(ACCOUNT), account: account_status() };
+		}
+	},
+
+	renewAccount: {
+		call: function() {
+			// wregister.sh writes via a .tmp file + mv, so the old account is
+			// atomically replaced only when the new (fresh-keys) registration
+			// succeeds; no separate rm needed.
+			rpclog('renewAccount');
+			if (scan_running() || speed_running())
+				return { error: 'scan or speed test is running - stop it first' };
+			if (register_running())
+				return { error: 'registration already in progress' };
+			command(`setsid sh -c 'sh ${BIN_DIR}/wregister.sh > ${REG_LOG} 2>&1' < /dev/null > /dev/null 2>&1 &`);
+			writefile(REG_MARK, '1');
+			return { started: true };
+		}
+	},
+
+	getSettings: {
+		call: function() {
+			rpclog('getSettings');
+			try {
+				const raw = read_file(SETTINGS);
+				const base = raw ? json(raw) : {};
+				base.subnets = SUBNETS;
+				return base;
+			} catch (e) {
+				return { subnets: SUBNETS };
+			}
+		}
+	},
+
+	saveSettings: {
+		args: { hosts: 0, timeout: 0, jobs: 0, discover: 0, discover_hosts: 0, exclude: [] },
+		call: function(req) {
+			const s = {
+				hosts: max(1, min(int(req.args?.hosts ?? 40), HOSTS_MAX)),
+				timeout: max(1, min(int(req.args?.timeout ?? 3), 10)),
+				jobs: max(1, min(int(req.args?.jobs ?? 3), JOBS_MAX)),
+				discover: int(req.args?.discover) == 1 ? 1 : 0,
+				discover_hosts: max(1, min(int(req.args?.discover_hosts ?? 2), 10)),
+				exclude: valid_subnets(req.args?.exclude ?? [])
+			};
+			let exclJson = '';
+			for (let i = 0; i < length(s.exclude); i++)
+				exclJson += (i ? ',' : '') + `"${s.exclude[i]}"`;
+			let exclLog = '';
+			for (let i = 0; i < length(s.exclude); i++)
+				exclLog += (i ? ' ' : '') + s.exclude[i];
+			const body = `{"hosts":${s.hosts},"timeout":${s.timeout},"jobs":${s.jobs},"discover":${s.discover},"discover_hosts":${s.discover_hosts},"exclude":[${exclJson}]}`;
+			try {
+				writefile(SETTINGS, body);
+				rpclog('saveSettings', `hosts=${s.hosts} timeout=${s.timeout} jobs=${s.jobs} discover=${s.discover} discover_hosts=${s.discover_hosts} exclude=[${exclLog}]`);
+				return { saved: true, settings: s };
+			} catch (e) {
+				return { error: 'failed to save settings' };
+			}
+		}
+	},
+
+	scanStart: {
+		args: { hosts: 0, timeout: 0, mode: "", jobs: 0, discover: 0, discover_hosts: 2, exclude: [] },
+		call: function(req) {
+			rpclog('scanStart', `hosts=${req.args?.hosts} timeout=${req.args?.timeout} mode=${req.args?.mode} jobs=${req.args?.jobs} discover=${req.args?.discover} discover_hosts=${req.args?.discover_hosts} exclude=[${join_list(valid_subnets(req.args?.exclude ?? []), ' ')}]`);
+			if (scan_running())
+				return { error: 'scan already running' };
+			if (speed_running())
+				return { error: 'speed test is running - wait for it to finish' };
+
+			const hosts = max(1, min(int(req.args?.hosts ?? 60), HOSTS_MAX));
+			const timeout = max(1, min(int(req.args?.timeout ?? 4), 10));
+			const jobs = max(1, min(int(req.args?.jobs ?? 3), JOBS_MAX));
+			// "full" sweeps every octet of each subnet; anything else is the fast mode
+			const full = (req.args?.mode == 'full') ? ' -f' : '';
+			// optional smart port discovery (fast-path on 2408, fallback sweep)
+			const discover = (int(req.args?.discover) == 1) ? ' -D' : '';
+			const dhosts = max(1, min(int(req.args?.discover_hosts ?? 2), 10));
+			const dhostsArg = discover ? ` -P ${dhosts}` : '';
+			// subnets to skip, passed to the host list generator (-x)
+			const exclude = valid_subnets(req.args?.exclude ?? []);
+			// subnets are validated (digits+dots only), so double quotes are safe
+			// here even though the launch command is itself wrapped in '...'
+			const excludeArg = length(exclude) ? ` -x "${join_list(exclude, ' ')}"` : '';
+
+			// on a clean router there is no account yet; register one on the fly
+			if (!file_exists(ACCOUNT)) {
+				rpclog('scanStart', 'no account, registering');
+				const reg = command(`sh ${BIN_DIR}/wregister.sh 2>&1`);
+				rpclog('scanStart', reg ? `auto-register output: ${reg}` : 'auto-register (no output)');
+				if (!file_exists(ACCOUNT)) {
+					rpclog('scanStart', 'auto-register failed');
+					return { error: 'account registration failed', output: reg };
+				}
+			}
+
+			command(`mv -f ${RESULT} ${RESULT_SAVED}`);
+			command(`rm -f ${PID} ${PROGRESS} ${RESULT}`);
+			command('mkdir -p /tmp/wscan');
+			// unique scan session id: scanStatus only honors a monotonic
+			// percent floor written for the SAME scan, so a stale value from
+			// a previous pass (or an in-flight poll of an old page) can never
+			// pin the bar at 99% while a fresh scan is starting
+			writefile('/tmp/wscan/scanid', `${time()}`);
+			// wipe the previous run's counters NOW. wscan.sh also truncates
+			// them later, but there is a window right after this call where
+			// scanStatus still sees stale scanned.cnt/scanned2.cnt/alive.*.txt
+			// (progress is 'starting') and would mis-classify the state as
+			// phase2, computing 99% and pinning the monotonic bar.
+			command('rm -f /tmp/wscan/hosts.txt /tmp/wscan/scanned.cnt /tmp/wscan/scanned2.cnt /tmp/wscan/alive.txt /tmp/wscan/hosts.*.txt /tmp/wscan/alive.*.txt');
+			writefile(PROGRESS, 'starting');
+			writefile('/tmp/wscan/percent', '0');
+
+			// launch in background, fully detached from rpcd so it survives the call
+			const cmd = `setsid sh -c 'sh ${BIN_DIR}/wscan.sh -n ${hosts} -t ${timeout} -j ${jobs}${full}${discover}${dhostsArg}${excludeArg} > /tmp/wscan.log 2>&1' < /dev/null > /dev/null 2>&1 &`;
+			popen(cmd)?.read?.('all');
+			return { started: true };
+		}
+	},
+
+	scanStop: {
+		call: function() {
+			rpclog('scanStop');
+			if (!scan_running())
+				return { stopped: false, error: 'no scan running' };
+			// stop by process group so workers (bg subshells) die too. wscan.sh
+			// writes its own pid to /tmp/wscan/pid; the pgid is field 5 of its
+			// stat. kill -TERM the group, drop leftover interfaces, mark done.
+			const pid = trim(command('cat /tmp/wscan/pid 2>/dev/null')) ?? '';
+			if (pid) {
+				const pgid = trim(command(`awk '{print $5}' /proc/${pid}/stat 2>/dev/null`)) ?? '';
+				if (pgid)
+					command(`kill -TERM -- -${pgid} 2>/dev/null`);
+				else
+					command(`kill -TERM ${pid} 2>/dev/null`);
+			}
+			command('for i in /sys/class/net/wgscan* /sys/class/net/wgprobe; do [ -e "$i" ] && ip link del ${i##*/} 2>/dev/null; done');
+			writefile(PROGRESS, 'done');
+			writefile('/tmp/wscan/percent', '100');
+			return { stopped: !scan_running() };
+		}
+	},
+
+	scanStatus: {
+		call: function() {
+			const hosts = trim(read_file('/tmp/wscan/hosts.txt')) ?? '';
+			const scanned_total = length(split(hosts, '\n')) - (length(hosts) ? 0 : 1);			const alive_count = to_int(trim(command('cat /tmp/wscan/alive.*.txt 2>/dev/null | wc -l')));
+			// workers share /tmp/wscan/progress and overwrite it, so its phase
+			// label flips back to phase1 while later workers still sweep. Derive
+			// the phase from AGGREGATE counters instead: phase1 runs until every
+			// host was swept (scanned.cnt == total), phase2 then counts processed
+			// endpoints. This keeps the UI monotonic.
+			const scanned1 = to_int(trim(command('wc -l < /tmp/wscan/scanned.cnt 2>/dev/null')));
+			const scanned2 = to_int(trim(command('wc -l < /tmp/wscan/scanned2.cnt 2>/dev/null')));
+			const prog = trim(read_file(PROGRESS)) ?? 'starting';
+			let scanned = 0;
+			let phaseName = prog;
+			let percent = 0;
+			if (prog == 'done') {
+				percent = 100;
+			} else if (prog == 'discovery') {
+				phaseName = 'discovery';
+				scanned = 0;
+				percent = 0;
+			} else if (scanned_total > 0 && scanned1 >= scanned_total) {
+				phaseName = 'phase2';
+				scanned = scanned2;
+				const alive_total = alive_count > 0 ? alive_count : 1;
+				percent = 80 + min(19, int(scanned * 20 / alive_total));
+			} else {
+				phaseName = 'phase1';
+				scanned = scanned1;
+				percent = scanned_total > 0 ? min(80, int(scanned * 80 / scanned_total)) : 0;
+			}
+			// monotonic: never let the bar go backwards while workers race.
+			// the floor is only meaningful while the same scan is running; a
+			// value tagged with an older scanid (previous pass or a stale poll
+			// of an old page) must not leak into the new progress bar
+			const scanid = trim(read_file('/tmp/wscan/scanid')) ?? '';
+			const prevraw = trim(read_file('/tmp/wscan/percent')) ?? '0';
+			const prevparts = split(prevraw, ':');
+			const prev = (length(prevparts) == 2 && prevparts[0] == scanid) ? to_int(prevparts[1]) : 0;
+			percent = max(percent, prev);
+			writefile('/tmp/wscan/percent', `${scanid}:${percent}`);
+			return {
+				running: scan_running(),
+				total: max(scanned_total, 0),
+				alive: max(alive_count, 0),
+				phase: prog,
+				phaseName: phaseName,
+				scanned: scanned,
+				percent: min(max(percent, 0), 100)
+			};
+		}
+	},
+
+	scanLog: {
+		call: function() {
+			const log = read_file(RPCLOG);
+			const wscan = read_file('/tmp/wscan.log');
+			return {
+				rpc: log ? rtrim(log, '\n') : '',
+				wscan: wscan ? rtrim(wscan, '\n') : ''
+			};
+		}
+	},
+
+	scanLogClear: {
+		call: function() {
+			rpclog('scanLogClear');
+			command(`: > ${RPCLOG} 2>/dev/null; : > /tmp/wscan.log 2>/dev/null`);
+			return { cleared: true };
+		}
+	},
+
+	scanResult: {
+		call: function() {
+			rpclog('scanResult');
+			// prefer a fresh result file if it exists at all (even an empty one
+			// produced by a scan that filtered everything out); only fall back
+			// to the last saved result when no fresh run wrote anything yet.
+			const hasFresh = stat(RESULT) != null;
+			let res = hasFresh ? read_file(RESULT) : null;
+			let src = hasFresh ? RESULT : RESULT_SAVED;
+			if (!hasFresh)
+				res = read_file(RESULT_SAVED);
+			if (!res)
+				return { results: [], error: 'no results yet' };
+			const lines = split(rtrim(res, '\n'), '\n');
+			const items = [];
+			let updated = null;
+			for (let i = 0; i < length(lines); i++) {
+				// ep node country rtt tun_rtt tun_loss torn(1=down)
+				const m = match(lines[i], /^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)$/);
+				if (m)
+					push(items, {
+						endpoint: m[1], node: m[2], country: m[3], ping: m[4],
+						tun_ping: m[5], tun_loss: m[6], torn: m[7] == '1'
+					});
+			}
+			try {
+				const st = stat(src);
+				updated = st ? st.mtime : null;
+			} catch (e) {}
+			return { results: items, updated: updated, saved: !hasFresh && src == RESULT_SAVED };
+		}
+	},
+
+	speedAvailable: {
+		call: function() {
+			rpclog('speedAvailable');
+			return { available: speed_available_count() };
+		}
+	},
+
+	speedStart: {
+		args: { count: 0, duration: 0 },
+		call: function(req) {
+			rpclog('speedStart', `count=${req.args?.count} duration=${req.args?.duration}`);
+			if (scan_running())
+				return { error: 'scan still running - wait for it to finish' };
+			if (speed_running())
+				return { error: 'speed test already running' };
+			if (!file_exists(RESULT) && !file_exists(RESULT_SAVED))
+				return { error: 'no results - run a scan first' };
+			const duration = max(10, min(int(req.args?.duration ?? 12), 30));
+			// fresh result preferred; the last saved result when nothing ran yet
+			const src = file_exists(RESULT) && read_file(RESULT) ? RESULT : RESULT_SAVED;
+			// count working (non-torn) endpoints so the user can't request more
+			// than the scan actually found
+			const avail = speed_available_count();
+			if (avail < 1)
+				return { error: 'no working endpoints in the scan result' };
+			const count = max(1, min(min(int(req.args?.count ?? 5), 40), avail));
+			command(`cp -f ${src} /tmp/wsspeed-src.txt`);
+			command(`rm -f ${SPD_RESULT} ${SPD_PROGRESS} ${SPD_PID}`);
+			command('mkdir -p /tmp/wsspeed');
+			writefile(SPD_PROGRESS, 'starting');
+			const cmd = `setsid sh -c 'sh ${BIN_DIR}/wsspeed.sh -n ${count} -t ${duration} > ${SPD_LOG} 2>&1' < /dev/null > /dev/null 2>&1 &`;
+			popen(cmd)?.read?.('all');
+			return { started: true, count: count, duration: duration, available: avail };
+		}
+	},
+
+	speedStop: {
+		call: function() {
+			rpclog('speedStop');
+			if (!speed_running())
+				return { stopped: false, error: 'no speed test running' };
+			const pid = trim(command(`cat ${SPD_PID} 2>/dev/null`)) ?? '';
+			if (pid) {
+				const pgid = trim(command(`awk '{print $5}' /proc/${pid}/stat 2>/dev/null`)) ?? '';
+				if (pgid)
+					command(`kill -TERM -- -${pgid} 2>/dev/null`);
+				else
+					command(`kill -TERM ${pid} 2>/dev/null`);
+			}
+			command('for i in /sys/class/net/wgspeed; do [ -e "$i" ] && ip link del ${i##*/} 2>/dev/null; done');
+			writefile(SPD_PROGRESS, 'done');
+			return { stopped: !speed_running() };
+		}
+	},
+
+	speedStatus: {
+		call: function() {
+			const prog = trim(read_file(SPD_PROGRESS) ?? '');
+			let index = 0;
+			let total = 0;
+			let current = '';
+			if (prog != 'done' && prog != 'starting' && prog != '') {
+				const parts = split(prog, ' ');
+				if (length(parts) >= 2) {
+				const frac = split(parts[0], '/');
+				index = length(frac) >= 1 ? to_int(frac[0]) : 0;
+				total = length(frac) >= 2 ? to_int(frac[1]) : 0;
+					current = parts[1];
+				}
+			}
+			return {
+				running: speed_running(),
+				index: index,
+				total: total,
+				current: current,
+				phase: prog
+			};
+		}
+	},
+
+	speedResult: {
+		call: function() {
+			rpclog('speedResult');
+			const raw = read_file(SPD_RESULT);
+			if (!raw)
+				return { results: [], error: 'no speed test results yet' };
+			const lines = split(rtrim(raw, '\n'), '\n');
+			const items = [];
+			for (let i = 0; i < length(lines); i++) {
+				// ep dl_kbps ul_kbps
+				const m = match(lines[i], /^(\S+)\s+(\S+)\s+(\S+)$/);
+				if (m)
+					push(items, { endpoint: m[1], dl: int(m[2]), ul: int(m[3]) });
+			}
+			return { results: items };
+		}
+	},
+
+	speedLog: {
+		call: function() {
+			const log = read_file(SPD_LOG);
+			return { log: log ? rtrim(log, '\n') : '' };
+		}
+	},
+
+	applyBest: {
+		args: { iface: "" },
+		call: function(req) {
+			rpclog('applyBest', `iface=${req.args?.iface}`);
+			const iface = req.args?.iface ?? 'warp';
+			const res = read_file(RESULT);
+			if (!res)
+				return { error: 'no results' };
+			const lines = split(rtrim(res, '\n'), '\n');
+			let best = null;
+			for (let i = 0; i < length(lines); i++) {
+				if (length(split(lines[i], ' ')) >= 7 && split(lines[i], ' ')[6] == '1')
+					continue; // skip torn-down endpoints
+				best = lines[i];
+				break;
+			}
+			if (!best)
+				return { error: 'no working endpoints' };
+			const m = match(best, /^(\d+\.\d+\.\d+\.\d+):(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)$/);
+			if (!m)
+				return { error: `cannot parse: ${best}` };
+			const endpoint_host = m[1], endpoint_port = m[2], node = m[3], country = m[4];
+
+			// peer section named ${iface}_peer must exist
+			command(`uci get network.${iface}_peer >/dev/null 2>&1 || return`);
+			const ok = popen('uci get network.' + iface + '_peer >/dev/null 2>&1; echo $?');
+			if (!ok || trim(ok.read('all')) != '0')
+				return { error: `peer section '${iface}_peer' not found` };
+
+			// apply via uci CLI (camera: set + commit), then reload network
+			const apply = command(`uci set network.${iface}_peer.endpoint_host='${endpoint_host}' ; uci set network.${iface}_peer.endpoint_port='${endpoint_port}' ; uci set network.${iface}_peer.persistent_keepalive='25' ; uci set network.${iface}_peer.allowed_ips='0.0.0.0/0' ; uci commit network 2>&1; echo rc=$?`);
+			command(`/etc/init.d/network reload >/dev/null 2>&1`);
+			return {
+				ok: true,
+				interface: iface,
+				endpoint: `${endpoint_host}:${endpoint_port}`,
+				node, country,
+				uci: apply
+			};
+		}
+	}
+};
+
+return { 'luci.rrws': methods };

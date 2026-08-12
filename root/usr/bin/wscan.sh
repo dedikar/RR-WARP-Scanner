@@ -1,5 +1,5 @@
 #!/bin/sh
-# WARPScan for OpenWrt - scan WARP endpoints via kernel AmneziaWG
+# RRWS for OpenWrt - scan WARP endpoints via kernel AmneziaWG
 # ash/busybox compatible. Writes only to /tmp. Needs a WARP account key
 # (from /tmp/warp-account.json or a uci amneziawg interface).
 # Output: one line per working endpoint: ip:port  NODE  LOC  ping_ms
@@ -11,18 +11,22 @@
 
 IF_WARP="warp"
 PORTS="2408 1701 4500 500"
+# full WARP UDP port list, used only by the discovery phase when the common
+# ones are blocked (see guidelines). Never swept exhaustively per host.
+ALL_PORTS="2408 500 854 859 864 878 880 890 891 894 903 908 928 934 939 942 943 945 946 955 968 987 988 1002 1010 1014 1018 1070 1074 1180 1387 1701 1843 2371 2506 3138 3476 3581 3854 4177 4198 4233 4500 5279 5956 7103 7152 7156 7281 7559 8319 8742 8854 8886"
 HOSTS_MAX=60
 HS_SWEEP=3        # per-port handshake wait during sweep phase
 JOBS=1            # parallel worker interfaces (wgscan0..wgscanN-1)
-COUNTRY=""
-NODE=""
-ACCOUNT="/etc/warpscan-account.json"
+ACCOUNT="/etc/rrws-account.json"
 OUT="/tmp/wscan_result.txt"
 TUN_PING_C=5      # echo burst size inside the tunnel (for TUN PING / LOSS)
 TEAR_RUN=2        # trailing lost echoes >= this => endpoint marked "torn down"
 
-usage() { echo "usage: wscan.sh [-w iface] [-n N] [-t sec] [-j N] [-p ports] [-c country] [-node NODE] [-o file] [-f]" >&2; exit 1; }
+usage() { echo "usage: wscan.sh [-w iface] [-n N] [-t sec] [-j N] [-p ports] [-o file] [-f] [-D] [-P N] [-x 'subnet ...']" >&2; exit 1; }
 FULL=0
+DISCOVER=0
+DISCOVER_HOSTS=2
+EXCLUDE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -w) IF_WARP="$2"; shift 2;;
@@ -30,15 +34,18 @@ while [ $# -gt 0 ]; do
     -t) HS_SWEEP="$2"; shift 2;;
     -j) JOBS="$2"; shift 2;;
     -p) PORTS="$2"; shift 2;;
-    -c) COUNTRY="$2"; shift 2;;
-    -node) NODE="$2"; shift 2;;
     -o) OUT="$2"; shift 2;;
     -f) FULL=1; shift 1;;
+    -D) DISCOVER=1; shift 1;;
+    -P) DISCOVER_HOSTS="$2"; shift 2;;
+    -x) EXCLUDE="$2"; shift 2;;
     *) usage;;
   esac
 done
+[ "$DISCOVER_HOSTS" -ge 1 ] 2>/dev/null || DISCOVER_HOSTS=2
+[ "$DISCOVER_HOSTS" -gt 10 ] && DISCOVER_HOSTS=10
 [ "$JOBS" -ge 1 ] 2>/dev/null || JOBS=1
-[ "$JOBS" -gt 6 ] && JOBS=6
+[ "$JOBS" -gt 70 ] && JOBS=70
 
 # key source: prefer account file, fall back to uci interface
 if [ -s "$ACCOUNT" ]; then
@@ -86,6 +93,87 @@ try_endpoint() {
     sleep 1
   done
   return 1
+}
+
+# discover which UDP ports the network lets out. Runs on a throwaway
+# interface, tries the common ports first and only sweeps the full list if
+# none of them got through (matching warpScout). Sets $PORTS to the working
+# set so the actual sweep never re-tries blocked ports on every host.
+discover_ports() {
+  local PIF="wgprobe" PIPA="$IPBASE.199"
+  local host port i last ok=0
+  # tell the backend we are probing ports, not sweeping hosts yet
+  echo "discovery" > $PROGRESS
+  # make sure any leftover probe interface from a previous run is gone
+  for i in 1 2 3; do
+    ip link del $PIF 2>/dev/null && break
+    sleep 1
+  done
+  modprobe amneziawg 2>/dev/null
+  if ! ip link add dev $PIF type amneziawg 2>/dev/null; then
+    log "discovery: cannot create probe interface, using defaults"
+    return 1
+  fi
+  ip link set $PIF up
+  ip addr add $PIPA/32 dev $PIF 2>/dev/null
+  amneziawg set $PIF listen-port 0 private-key <(echo "$PRIV") peer "$PEER" allowed-ips 0.0.0.0/0 2>/dev/null
+
+  # Fast path: the primary port (2408, first in $PORTS) gets through on any of
+  # the first few probe hosts => the network is not filtering UDP traffic, so
+  # keep the default port list (no prep-paid sweep). This costs ~2s.
+  for host in $(head -n $DISCOVER_HOSTS /tmp/wscan/hosts.txt); do
+    [ -n "$host" ] || continue
+    if try_endpoint "$host:2408" 3 0 "$PIF"; then
+      ok=1
+      log "discovery: $host:2408 works"
+      break
+    fi
+  done
+
+  if [ "$ok" != "1" ]; then
+    # the primary port is blocked; find which ports the network lets out and
+    # narrow $PORTS to only those (so the sweep never re-tries blocked ports
+    # on every host). Cheap pass first: common fallbacks (1701/4500/500) on
+    # all probe hosts, 2 tries each - the usual filtered-network case resolves
+    # in seconds instead of sweeping the full list per host.
+    local found_ports="" host2 wp
+    for port in 1701 4500 500; do
+      for host2 in $(head -n $DISCOVER_HOSTS /tmp/wscan/hosts.txt); do
+        [ -n "$host2" ] || continue
+        if try_endpoint "$host2:$port" 2 0 "$PIF"; then
+          found_ports="$found_ports $port"
+          log "discovery: $host2:$port works (fallback)"
+          break
+        fi
+      done
+      [ -n "$found_ports" ] && break
+    done
+    # Full-list sweep (1 try each) only when 1701/4500/500 were all dead,
+    # i.e. a heavily filtered network that answers only an exotic port.
+    if [ -z "$found_ports" ]; then
+      for host2 in $(head -n $DISCOVER_HOSTS /tmp/wscan/hosts.txt); do
+        [ -n "$host2" ] || continue
+        for port in $ALL_PORTS; do
+          if try_endpoint "$host2:$port" 1 0 "$PIF"; then
+            found_ports="$found_ports $port"
+            log "discovery: $host2:$port works (full sweep)"
+            break
+          fi
+        done
+        [ -n "$found_ports" ] && break
+      done
+    fi
+    if [ -n "$found_ports" ]; then
+      PORTS=$(echo $found_ports | tr ' ' '\n' | sort -n | tr '\n' ' ')
+      log "discovery: primary blocked, using ports: $PORTS"
+    else
+      log "discovery: no alternative port answered, keeping defaults: $PORTS"
+    fi
+  else
+    log "discovery: network passes UDP, ports unchanged (${PORTS})"
+  fi
+
+  ip link del $PIF 2>/dev/null
 }
 
 # honest latency to the endpoint host via ICMP; falls back to handshake time
@@ -147,7 +235,7 @@ worker() {
     for port in $PORTS; do
       if try_endpoint "$ip:$port" "$HS_SWEEP" "$last" "$IF"; then
         echo "$ip:$port" >> "$alivefile"
-        log "alive: $ip:$port ($w/$count)"
+        log "alive: $ip:$port (worker $w, host #$count)"
         last=$(amneziawg show $IF latest-handshakes 2>/dev/null | awk -v p="$PEER" '$1==p{print $2;exit}')
         break
       fi
@@ -156,6 +244,7 @@ worker() {
 
   # ---- worker phase 2: honest RTT + meta + in-tunnel probe for its survivors ----
   echo "phase2" > $PROGRESS
+  [ -s "$alivefile" ] || { ip link del $IF 2>/dev/null; return 0; }
   while read ep; do
     [ -z "$ep" ] && continue
     ip=${ep%:*}
@@ -183,8 +272,6 @@ worker() {
     if [ -n "$meta" ]; then
       colo=$(echo "$meta" | cut -d'|' -f1)
       loc=$(echo "$meta" | cut -d'|' -f2)
-      [ -n "$COUNTRY" ] && [ "$loc" != "$COUNTRY" ] && continue
-      [ -n "$NODE" ] && [ "$colo" != "$NODE" ] && continue
       # in-tunnel burst: TUN PING, LOSS, torn-down detection
       tp=$(tun_probe "$IPLOCAL")
       if [ -n "$tp" ]; then
@@ -206,6 +293,10 @@ worker() {
 # host list generator: interleave subnets so the first HOSTS_MAX lines
 # cover every pool instead of only the first two (matches warpScout pools).
 SUBNETS="8.6.112 8.34.70 8.34.146 8.35.211 8.39.125 8.39.204 8.39.214 8.47.69 162.159.192 162.159.193 162.159.195 162.159.197 162.159.204 188.114.96 188.114.97 188.114.98 188.114.99"
+# drop excluded subnets (space-separated, from -x) before generating the list
+for ex in $EXCLUDE; do
+  SUBNETS=$(echo $SUBNETS | tr ' ' '\n' | grep -v "^${ex}$" | tr '\n' ' ')
+done
 NSUB=$(echo $SUBNETS | wc -w)
 BATCH=$(( (HOSTS_MAX + NSUB - 1) / NSUB ))
 [ "$BATCH" -lt 1 ] && BATCH=1
@@ -229,16 +320,24 @@ BATCH=$(( (HOSTS_MAX + NSUB - 1) / NSUB ))
 } > /tmp/wscan/allhosts.txt
 head -n "$HOSTS_MAX" /tmp/wscan/allhosts.txt > /tmp/wscan/hosts.txt
 
-PROGRESS="/tmp/wscan/progress"
-
 [ -d /tmp/wscan ] || mkdir -p /tmp/wscan
-: > "$OUT"
+echo $$ > /tmp/wscan/pid
 : > "$LOG"
 : > "$SCANNED"
 : > "$SCANNED2"
+: > "$OUT"
 : > /tmp/wscan/alive.txt
-# clean any leftover worker files from previous runs (they append, not truncate)
+# clean leftover worker files from previous runs BEFORE discovery: the probe
+# phase can take minutes, and stale alive.*.txt would leak the previous run's
+# "alive" count into scanStatus while we are still picking ports.
 rm -f /tmp/wscan/hosts.*.txt /tmp/wscan/alive.*.txt
+
+# optional smart port discovery; off by default so a plain scan behaves
+# exactly as before (fixed port list)
+[ "$DISCOVER" = "1" ] && discover_ports
+
+PROGRESS="/tmp/wscan/progress"
+
 # split the host list across workers round-robin
 w=0
 while read ip; do
@@ -249,12 +348,15 @@ done < /tmp/wscan/hosts.txt
 
 TOTAL=$(wc -l < /tmp/wscan/hosts.txt)
 echo "phase1" > $PROGRESS
-log "start: $TOTAL hosts, jobs=$JOBS, sweep=$HS_SWEEP s, ports=$PORTS, full=$FULL"
+log "start: $TOTAL hosts, jobs=$JOBS, sweep=$HS_SWEEP s, ports=$PORTS, full=$FULL${EXCLUDE:+ excl=$EXCLUDE}"
 
-# launch workers
+# launch workers (only those that actually got hosts: with jobs > hosts the
+# round-robin split leaves the trailing workers with no file at all)
 w=0
 while [ $w -lt $JOBS ]; do
-  worker $w &
+  if [ -s "/tmp/wscan/hosts.$w.txt" ]; then
+    worker $w &
+  fi
   w=$((w+1))
 done
 wait

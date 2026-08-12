@@ -1,0 +1,5 @@
+# luci-app-rrws: files to include in sysupgrade/LuCI backups
+# (read by /sbin/sysupgrade via /lib/upgrade/keep.d/*)
+/etc/rrws-account.json
+/etc/rrws-settings.json
+/etc/rrws-last-result.txt
