@@ -50,6 +50,11 @@ for RouteRich routers and the LuCI web interface.
   UI; the account lives in `/etc/rrws-account.json` and survives reboot.
 - **Monotonic progress bar**, scan date, persistent results
   (`/etc/rrws-last-result.txt`).
+- **Backup with standard tools** — the account, settings and last result
+  (`/etc/rrws-account.json`, `/etc/rrws-settings.json`,
+  `/etc/rrws-last-result.txt`) are included in OpenWrt's regular backup
+  (sysupgrade / LuCI Backup) via `/lib/upgrade/keep.d/luci-app-rrws`, so the
+  package works with the previous account after a firmware restore.
 - **Ready `.conf`** — copy or view the AmneziaWG config for every found
   endpoint, with `Jc/Jmin/Jmax/H1-4/I1` obfuscation.
 
