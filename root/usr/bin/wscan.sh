@@ -101,12 +101,13 @@ try_endpoint() {
 # set so the actual sweep never re-tries blocked ports on every host.
 discover_ports() {
   local PIF="wgprobe" PIPA="$IPBASE.199"
-  local host port i last ok=0 ddone=0 dtotal=0
-  # progress total: probe hosts (fast path) + 3 fallback ports + full port list
-  # (53). The full list is only reached when 2408 and the fallbacks are dead,
-  # so dtotal is the worst case - the bar still moves for every check.
-  dtotal=$(( DISCOVER_HOSTS + 3 + $(echo $ALL_PORTS | wc -w) ))
-  dp() { ddone=$((ddone+1)); echo "discovery:$ddone:$dtotal" > $PROGRESS; }
+  local host port i last ok=0 ddone=0 dtotal=0 np
+  # progress total (worst case): fast-path probe hosts, then 3 fallback ports,
+  # then the FULL list per probe host - the sweep walks every port on every
+  # probe host until one answers, so done can reach HOSTS*PORTS, not just PORTS.
+  np=$(echo $ALL_PORTS | wc -w)
+  dtotal=$(( DISCOVER_HOSTS + 3 + DISCOVER_HOSTS * np ))
+  dp() { ddone=$((ddone+1)); [ "$ddone" -gt "$dtotal" ] && ddone=$dtotal; echo "discovery:$ddone:$dtotal" > $PROGRESS; }
   # tell the backend we are probing ports, not sweeping hosts yet
   echo "discovery:0:$dtotal" > $PROGRESS
   # make sure any leftover probe interface from a previous run is gone

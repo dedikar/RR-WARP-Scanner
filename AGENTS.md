@@ -121,6 +121,10 @@ LuCI-приложение **RRWS (RouteRich WARP Scanner)** для OpenWrt-ро�
   (исключает build/, backup*, *.ipk), .gitattributes (LF для sh/ucode/js).
 
 ## Текущее состояние (2026-08-11)
+- Установлена 0.2.1-r21: фикс счётчика discovery — total теперь
+  `HOSTS + 3 + HOSTS*53` (полный перебор идёт на каждый пробный хост),
+  done клампится на total. Проверено: 5 хостов → total 278, done 1→278,
+  без превышений.
 - Установлена 0.2.1-r20: discovery-фаза показывает прогресс — wscan.sh пишет
   `discovery:<done>:<total>` в progress на каждую проверку, backend scanStatus
   считает процент (0-80%, монотонный), UI показывает «проверяю порты X/Y».
