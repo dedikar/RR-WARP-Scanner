@@ -121,6 +121,11 @@ LuCI-приложение **RRWS (RouteRich WARP Scanner)** для OpenWrt-ро�
   (исключает build/, backup*, *.ipk), .gitattributes (LF для sh/ucode/js).
 
 ## Текущее состояние (2026-08-11)
+- Установлена 0.2.1-r20: discovery-фаза показывает прогресс — wscan.sh пишет
+  `discovery:<done>:<total>` в progress на каждую проверку, backend scanStatus
+  считает процент (0-80%, монотонный), UI показывает «проверяю порты X/Y».
+  Причина: на режущей UDP сети полный перебор 53 портов на 5 хостах занимал
+  ~5.5 мин при баре на 0% (выглядело как зависание).
 - Собрана 0.2.1-r19 (не установлена): юридическая атрибуция — MIT-текст
   warpscout в пакете (`/usr/share/licenses/luci-app-rrws/warpscout-LICENSE`)
   и README-раздел «Атрибуция: warpscout (MIT)». warpscout (© 2026 Nikita S.)

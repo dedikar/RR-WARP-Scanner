@@ -831,7 +831,7 @@ var view = this;
 				else if (st.phaseName === 'phase2')
 					txt = 'Фаза 2: замеры пинга и метаданных, обработано ' + (st.scanned || 0) + '/' + (st.alive || 0);
 				else if (st.phaseName === 'discovery')
-					txt = 'Discovery Mode: подбор портов...';
+					txt = 'Discovery Mode: проверяю порты ' + (st.discDone || 0) + '/' + (st.discTotal || 0) + '...';
 				else
 					txt = 'Сканирование... ' + (st.phase || '');
 				txt += ' [' + pct + '%]';

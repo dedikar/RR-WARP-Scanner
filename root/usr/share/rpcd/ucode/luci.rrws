@@ -406,12 +406,24 @@ const methods = {
 			let scanned = 0;
 			let phaseName = prog;
 			let percent = 0;
+			let discDone = 0;
+			let discTotal = 0;
 			if (prog == 'done') {
 				percent = 100;
-			} else if (prog == 'discovery') {
+			} else if (prog == 'discovery' || (length(prog) > 10 && substr(prog, 0, 10) == 'discovery:')) {
 				phaseName = 'discovery';
 				scanned = 0;
-				percent = 0;
+				// discovery now reports progress as discovery:<done>:<total>;
+				// derive a percent so the bar moves instead of sitting at 0%
+				// during a long port sweep on filtered networks
+				const dp = split(prog, ':');
+				if (length(dp) == 3) {
+					const ddone = to_int(dp[1]);
+					const dtotal = to_int(dp[2]);
+					discDone = ddone;
+					discTotal = dtotal;
+					percent = dtotal > 0 ? min(80, int(ddone * 80 / dtotal)) : 0;
+				}
 			} else if (scanned_total > 0 && scanned1 >= scanned_total) {
 				phaseName = 'phase2';
 				scanned = scanned2;
@@ -439,6 +451,8 @@ const methods = {
 				phase: prog,
 				phaseName: phaseName,
 				scanned: scanned,
+				discDone: discDone,
+				discTotal: discTotal,
 				percent: min(max(percent, 0), 100)
 			};
 		}

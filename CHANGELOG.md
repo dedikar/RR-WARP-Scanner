@@ -2,6 +2,14 @@
 Сборка: `./build.sh` (автоинкремент через `version.txt`) или `./build.sh <версия>`.
 Собирается в `build/luci-app-rrws_<версия>_all.ipk`, бэкапы — в `backup_<timestamp>/`.
 
+## 0.2.1-r20
+- Discovery-фаза больше не выглядит зависанием: wscan.sh пишет прогресс
+  `discovery:<done>:<total>` в progress-файл на каждую проверку порта/хоста,
+  backend scanStatus выводит из него процент (0-80%, монотонный), UI
+  показывает «Discovery Mode: проверяю порты X/Y...». Причина — на сетях с
+  блокировкой UDP discovery уходил в полный перебор 53 портов на 5 пробных
+  хостах (до ~5.5 мин) при прогресс-баре, застывшем на 0%.
+
 ## 0.2.1-r19
 - Юридическая атрибуция: в пакет добавлен MIT-текст warpscout
   (`/usr/share/licenses/luci-app-rrws/warpscout-LICENSE`) и README обновлён

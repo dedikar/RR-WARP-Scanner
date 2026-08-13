@@ -101,9 +101,14 @@ try_endpoint() {
 # set so the actual sweep never re-tries blocked ports on every host.
 discover_ports() {
   local PIF="wgprobe" PIPA="$IPBASE.199"
-  local host port i last ok=0
+  local host port i last ok=0 ddone=0 dtotal=0
+  # progress total: probe hosts (fast path) + 3 fallback ports + full port list
+  # (53). The full list is only reached when 2408 and the fallbacks are dead,
+  # so dtotal is the worst case - the bar still moves for every check.
+  dtotal=$(( DISCOVER_HOSTS + 3 + $(echo $ALL_PORTS | wc -w) ))
+  dp() { ddone=$((ddone+1)); echo "discovery:$ddone:$dtotal" > $PROGRESS; }
   # tell the backend we are probing ports, not sweeping hosts yet
-  echo "discovery" > $PROGRESS
+  echo "discovery:0:$dtotal" > $PROGRESS
   # make sure any leftover probe interface from a previous run is gone
   for i in 1 2 3; do
     ip link del $PIF 2>/dev/null && break
@@ -122,12 +127,13 @@ discover_ports() {
   # the first few probe hosts => the network is not filtering UDP traffic, so
   # keep the default port list (no prep-paid sweep). This costs ~2s.
   for host in $(head -n $DISCOVER_HOSTS /tmp/wscan/hosts.txt); do
-    [ -n "$host" ] || continue
+    [ -n "$host" ] || { dp; continue; }
     if try_endpoint "$host:2408" 3 0 "$PIF"; then
       ok=1
       log "discovery: $host:2408 works"
       break
     fi
+    dp
   done
 
   if [ "$ok" != "1" ]; then
@@ -146,6 +152,7 @@ discover_ports() {
           break
         fi
       done
+      dp
       [ -n "$found_ports" ] && break
     done
     # Full-list sweep (1 try each) only when 1701/4500/500 were all dead,
@@ -157,8 +164,10 @@ discover_ports() {
           if try_endpoint "$host2:$port" 1 0 "$PIF"; then
             found_ports="$found_ports $port"
             log "discovery: $host2:$port works (full sweep)"
+            dp
             break
           fi
+          dp
         done
         [ -n "$found_ports" ] && break
       done
