@@ -10,6 +10,8 @@ LuCI-приложение для роутера RouteRich, которое ска
 
 Проект — переработка [warpscout](https://github.com/vernette/warpscout) под роутер RouteRich и веб-интерфейс LuCI.
 
+**[English README](README.en.md)**
+
 ## Скриншот
 
 ![RR WARP Scanner — интерфейс](.github/assets/rrws-scan.png)
