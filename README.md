@@ -1,7 +1,7 @@
 # RR WARP Scanner (luci-app-rrws)
 
 LuCI-приложение для роутера RouteRich, которое сканирует эндпоинты Cloudflare WARP
-через ядерный [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go), находит
+через ядерный [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module), находит
 самые быстрые и даёт готовые `.conf` для импорта в клиент WARP.
 
 Сканирование идёт **прямо на роутере**: реальный handshake до каждого
@@ -239,7 +239,7 @@ make package/luci-app-rrws/compile
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Platform: OpenWrt 24.10+](https://img.shields.io/badge/platform-OpenWrt%2024.10%2B-green.svg)](#требования)
-[![Protocol: AmneziaWG](https://img.shields.io/badge/protocol-AmneziaWG-orange.svg)](https://github.com/amnezia-vpn/amneziawg-go)
+[![Protocol: AmneziaWG](https://img.shields.io/badge/protocol-AmneziaWG-orange.svg)](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module)
 [![MIT (warpscout)](https://img.shields.io/badge/warpscout-MIT-yellow.svg)](https://github.com/vernette/warpscout)
 
 Apache-2.0.
