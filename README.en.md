@@ -43,6 +43,8 @@ for RouteRich routers and the LuCI web interface.
   mid-burst). Such endpoints are shown but never picked as best.
 - **Flexible scan size** — the "Hosts" field from 1 to 4318 (the whole pool):
   quick runs on a few dozen hosts or a full sweep of every subnet.
+- **Subnet exclusion** — checkboxes to skip any of the 17 WARP pool subnets
+  (e.g. ones that are known dead or unwanted).
 - **Smart port-discovery** (optional) — adapts to UDP filtering of the network.
 - **WARP account management** — register, re-register, delete right from the
   UI; the account lives in `/etc/rrws-account.json` and survives reboot.
