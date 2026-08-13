@@ -58,7 +58,8 @@ LuCI-приложение для роутера RouteRich, которое ска
 
 ## Требования
 
-OpenWrt 24.10+ с поддержкой AmneziaWG. Зависимости пакета:
+Роутер RouteRich на OpenWrt 24.10+ с поддержкой AmneziaWG. Зависимости
+пакета:
 
 - `amneziawg-tools`, `kmod-amneziawg`
 - `jq`, `curl`

@@ -55,7 +55,8 @@ for RouteRich routers and the LuCI web interface.
 
 ## Requirements
 
-OpenWrt 24.10+ with AmneziaWG support. Package dependencies:
+A RouteRich router running OpenWrt 24.10+ with AmneziaWG support. Package
+dependencies:
 
 - `amneziawg-tools`, `kmod-amneziawg`
 - `jq`, `curl`
