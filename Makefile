@@ -17,7 +17,7 @@ define Package/luci-app-rrws
   SECTION:=luci
   CATEGORY:=LuCI
   SUBMENU:=3. Applications
-  TITLE:=RRWS - WARP endpoint scanner for AmneziaWG
+  TITLE:=RR WARP Scanner for AmneziaWG
   URL:=https://github.com/vernette/warpscout
   PKGARCH:=all
   DEPENDS:=+amneziawg-tools +kmod-amneziawg +jq +curl +luci-base +rpcd-mod-ucode
@@ -26,7 +26,7 @@ endef
 define Package/luci-app-rrws/description
   Scan Cloudflare WARP endpoints via kernel AmneziaWG,
   pick the best and import it into the warp interface.
-  Provides a LuCI page under Services -> RRWS.
+  Provides a LuCI page under Services -> RR WARP Scanner.
 endef
 
 define Package/luci-app-rrws/postinst

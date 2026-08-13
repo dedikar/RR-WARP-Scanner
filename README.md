@@ -1,6 +1,6 @@
-# luci-app-rrws — RouteRich WARP Scanner (RRWS)
+# RR WARP Scanner (luci-app-rrws)
 
-LuCI-приложение для OpenWrt, которое сканирует эндпоинты Cloudflare WARP
+LuCI-приложение для роутера RouteRich, которое сканирует эндпоинты Cloudflare WARP
 через ядерный [AmneziaWG](https://github.com/amnezia-vpn/amneziawg), находит
 самые быстрые и даёт готовые `.conf` для импорта в клиент WARP.
 
@@ -8,14 +8,31 @@ LuCI-приложение для OpenWrt, которое сканирует эн
 эндпоинта, честный ICMP-пинг, проверка туннеля (TUN PING / LOSS) и детект
 «torn down» эндпоинтов. Никакого внешнего компьютера не нужно.
 
-Проект — переработка [warpscout](https://github.com/vernette/warpscout) под
-ядро OpenWrt и веб-интерфейс LuCI.
+Проект — переработка [warpscout](https://github.com/vernette/warpscout) под роутер RouteRich и веб-интерфейс LuCI.
+
+## Скриншот
+
+![RR WARP Scanner — интерфейс](.github/assets/rrws-scan.png)
+
+## Содержание
+
+- [Возможности](#возможности)
+- [Требования](#требования)
+- [Установка](#установка)
+- [Использование](#использование)
+- [Discovery Mode](#discovery-mode-умный-поиск-портов)
+- [Как работает скан](#как-работает-скан)
+- [Формат результата](#формат-результата)
+- [Файлы](#файлы)
+- [Сборка](#сборка)
+- [Ограничения и заметки](#ограничения-и-заметки)
+- [Лицензия](#лицензия)
 
 ## Возможности
 
 - **Двухфазный скан** — быстрая разведка handshake'ами (`phase 1`), затем
   честная задержка и проверка туннеля для выживших (`phase 2`).
-- **Параллельность** — до 12 воркеров (`wgscan0..N-1`), каждый со своим
+- **Параллельность** — до 70 воркеров (`wgscan0..N-1`), каждый со своим
   туннелем, делят список хостов по кругу.
 - **Честный пинг** — задержка к эндпоинту измеряется ICMP RTT до хоста,
   а не через туннель/curl.
@@ -23,8 +40,8 @@ LuCI-приложение для OpenWrt, которое сканирует эн
   эндпоинт: считается задержка, потери и детект «torn down» (DPI оборвал
   туннель посреди серии). Такие эндпоинты показываются, но никогда не
   выбираются лучшими.
-- **Два режима** — «Быстрый поиск» (детерминированные живые октеты) и
-  «Полный поиск (долго!)» (все октеты всех подсетей).
+- **Гибкий объём скана** — поле «Хостов» от 1 до 4318 (весь пул):
+  быстрые прогоны на десятках хостов или полный перебор всех подсетей.
 - **Умный port-discovery** (опционально) — подстраивается под блокировки
   UDP сети.
 - **Управление аккаунтом WARP** — регистрация, перерегистрация, удаление
@@ -51,34 +68,36 @@ OpenWrt 24.10+ с поддержкой AmneziaWG. Зависимости пак�
 Соберите пакет (см. «Сборка») и установите:
 
 ```sh
-opkg install luci-app-rrws_0.2.0-r71_all.ipk
+opkg install luci-app-rrws_0.2.1-r19_all.ipk
 ```
 
 Либо через LuCI: **System → Software → Upload Package**.
 
 После установки обновите страницу с очисткой кэша (Ctrl+Shift+R). Приложение
-появится в **Services → RRWS**.
+появится в **Services → RR WARP Scanner**.
 
 ## Использование
 
 ### Управление аккаунтом
 
 Для скана нужен ключ WARP. Если аккаунта ещё нет — нажмите
-**«Зарегистрировать WARP»** (wregister.sh создаст его, при необходимости
-через существующий туннель, если API Cloudflare заблокирован). Доступны
-также «Перерегистрировать» (свежие ключи) и «Удалить аккаунт».
+**«Зарегистрировать WARP»**: скрипт создаст его сам, а если API Cloudflare
+заблокирован, попробует добраться до него через временный туннель, а при
+неудаче — через локальный HTTP-прокси (пакет `opera-proxy`, ставится из
+фидов RouteRich). Доступны также «Перерегистрировать» (свежие ключи) и
+«Удалить аккаунт».
 
 ### Параметры скана
 
-- **Хостов** (1–600) — сколько эндпоинтов проверить.
+- **Хостов** (весь пул: 4318) — сколько эндпоинтов проверить.
 - **Таймаут (сек)** (1–10) — время ожидания handshake на порт.
 - **Потоков** (1–70) — параллельных воркеров.
 - **Discovery Mode** + **Пробных хостов** — см. ниже.
 
 ### Кнопки
 
-- **Быстрый поиск** — быстрый режим с параметрами выше.
-- **Полный поиск (долго!)** — перебор всех подсетей целиком.
+- **Найти туннели** — запустить скан с выбранными параметрами.
+- **Остановить** — прервать текущий скан.
 - **Скачать всё .txt** — сохранить все результаты.
 - **Скопировать .conf / Показать .conf** — у каждой строки таблицы:
   готовый AmneziaWG-конфиг для этого эндпоинта. Ключи, `Address`, параметры
@@ -185,9 +204,9 @@ scanResult (UI) ← /tmp/wscan_result.txt (или сохранённый при 
 ./build.sh
 
 # или точная версия
-./build.sh 0.2.0-r42
+./build.sh 0.2.1-r19
 
-# результат: build/luci-app-rr_0.2.0-r71_all.ipk
+# результат: build/luci-app-rrws_0.2.1-r19_all.ipk
 ```
 
 `build.sh` работает на Ubuntu/Debian, SDK не нужен — пакет pure-скриптовый
@@ -216,4 +235,37 @@ make package/luci-app-rrws/compile
 
 ## Лицензия
 
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Platform: OpenWrt 24.10+](https://img.shields.io/badge/platform-OpenWrt%2024.10%2B-green.svg)](#требования)
+[![Protocol: AmneziaWG](https://img.shields.io/badge/protocol-AmneziaWG-orange.svg)](https://github.com/amnezia-vpn/amneziawg)
+[![MIT (warpscout)](https://img.shields.io/badge/warpscout-MIT-yellow.svg)](https://github.com/vernette/warpscout)
+
 Apache-2.0.
+
+### Атрибуция: warpscout (MIT)
+
+Этот проект — переработка [warpscout](https://github.com/vernette/warpscout)
+(https://github.com/vernette/warpscout), Copyright (c) 2026 Nikita S.,
+лицензированного под MIT License:
+
+> MIT License
+>
+> Copyright (c) 2026 Nikita S.
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.

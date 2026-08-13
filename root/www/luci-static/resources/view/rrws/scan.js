@@ -527,7 +527,7 @@ var view = this;
 		var appVerEl = E('code', { 'style': 'font-size: 12px;' }, '...');
 		var accStatusLabel = E('span', { 'class': 'label label-default' }, '...');
 
-		headerEl.appendChild(E('h2', {}, 'RRWS — RouteRich WARP Scanner'));
+		headerEl.appendChild(E('h2', {}, 'RR WARP Scanner'));
 		headerEl.appendChild(E('div', { 'class': 'cbi-map-descr' },
 			'Поиск быстрых Cloudflare WARP-эндпоинтов через AmneziaWG. Версия: '));
 		headerEl.lastChild.appendChild(appVerEl);
@@ -777,12 +777,15 @@ var view = this;
 		var f = E('div', { 'class': 'cbi-page-actions' });
 
 		// clamp a numeric input to [min,max] when the user edits it (max on a
-		// type=number field only validates, it does not stop over-typing)
+		// type=number field only validates, it does not stop over-typing).
+		// max can be a number or a function returning the current ceiling (for
+		// fields whose cap changes dynamically, e.g. speed test endpoints).
 		var clampInput = function(input, min, max) {
 			input.addEventListener('change', function() {
+				var m = (typeof max === 'function') ? max() : max;
 				var v = parseInt(input.value, 10);
 				if (isNaN(v)) v = min;
-				input.value = Math.max(min, Math.min(max, v));
+				input.value = Math.max(min, Math.min(m, v));
 			});
 		};
 
@@ -1106,7 +1109,8 @@ var view = this;
 			'class': 'cbi-input-text', 'type': 'number', id: 'ws-speed-count',
 			value: '5', min: '1', max: '40', style: 'width: 70px'
 		});
-		clampInput(speedCountInput, 1, 40);
+		var speedCountCap = 40;
+		clampInput(speedCountInput, 1, function() { return speedCountCap; });
 		var speedCountLabel = E('label', { 'for': 'ws-speed-count' }, 'Эндпоинтов (1-40): ');
 		speedSection.appendChild(speedCountLabel);
 		speedSection.appendChild(speedCountInput);
@@ -1127,11 +1131,13 @@ var view = this;
 			callSpeedAvailable().then(function(d) {
 				var avail = (d && d.available) ? parseInt(d.available, 10) : 0;
 				if (avail < 1) {
+					speedCountCap = 40;
 					speedCountInput.max = '40';
 					speedCountLabel.textContent = 'Эндпоинтов (1-40): ';
 					return;
 				}
 				var cap = Math.min(avail, 40);
+				speedCountCap = cap;
 				speedCountInput.max = String(cap);
 				speedCountLabel.textContent = 'Эндпоинтов (1-' + cap + '): ';
 				var v = parseInt(speedCountInput.value, 10) || 1;
@@ -1269,6 +1275,8 @@ var view = this;
 
 		speedBtn.addEventListener('click', function() {
 			var count = parseInt(speedCountInput.value, 10) || 5;
+			count = Math.max(1, Math.min(count, speedCountCap));
+			speedCountInput.value = String(count);
 			var duration = parseInt(speedTimeInput.value, 10) || 12;
 			console.log('[rrws] speed click', count, duration);
 			speedResultEl.innerHTML = '';

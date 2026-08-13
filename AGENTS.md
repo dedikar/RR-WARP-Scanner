@@ -102,10 +102,12 @@ LuCI-приложение **RRWS (RouteRich WARP Scanner)** для OpenWrt-ро�
   `--info "depends:..."`. Установка: `apk add --allow-untrusted <файл>.apk`.
   `build.sh <версия>` (или `both`) — по умолчанию ipk.
   Тест в WSL: `echo 123456 | sudo -S apk --root /tmp/apktest --initdb add 2>/dev/null`
-  (создать БД), затем `apk add --simulate --allow-untrusted --force-non-repository
-  <файл>.apk` — apk распарсит пакет и упрётся только в отсутствующие депы
-  OpenWrt (rpcd-mod-ucode и т.п.) — это НОРМА и доказывает валидность apk;
-  полная установка возможна только на роутере 25.12.
+  (создать БД), затем `apk add --root /tmp/apktest --simulate --allow-untrusted
+  --force-non-repository <файл>.apk` — apk распарсит пакет и упрётся только
+  в отсутствующие депы OpenWrt (rpcd-mod-ucode и т.п.) — это НОРМА и доказывает
+  валидность apk; полная установка возможна только на роутере 25.12.
+  ВАЖНО: `--root` нужен и в simulate — без него apk читает системную БД WSL
+  и падает «Unable to read database».
 - GitHub CLI `gh` отсутствует — для публикации релиза доступ даст пользователь
 
 ## Версии
@@ -119,6 +121,16 @@ LuCI-приложение **RRWS (RouteRich WARP Scanner)** для OpenWrt-ро�
   (исключает build/, backup*, *.ipk), .gitattributes (LF для sh/ucode/js).
 
 ## Текущее состояние (2026-08-11)
+- Собрана 0.2.1-r19 (не установлена): юридическая атрибуция — MIT-текст
+  warpscout в пакете (`/usr/share/licenses/luci-app-rrws/warpscout-LICENSE`)
+  и README-раздел «Атрибуция: warpscout (MIT)». warpscout (© 2026 Nikita S.)
+  лицензирован MIT; наш проект — переработка, MIT требует копирайт-уведомление.
+- Установлена 0.2.1-r18: переименование в UI — пункт меню и заголовок страницы
+  «RR WARP Scanner» (menu.d title + scan.js h2). Собраны ipk и apk.
+- Установлена 0.2.1-r17: фикс cap поля «Эндпоинтов» теста скорости —
+  кламп теперь динамический через функцию-max в `clampInput` (`speedCountCap`
+  из `refreshSpeedAvailable`), кнопка запуска дополнительно клампит
+  `[1, speedCountCap]`. См. CHANGELOG r17.
 - Собрана 0.2.1-r16 (не установлена): потолок воркеров снижен 197 → 70
   (`JOBS_MAX` в ucode, `-gt 70` в wscan.sh, `max`/`clampInput`/подпись в
   scan.js). Причина — у части роутеров на 197 потоках полностью ломается

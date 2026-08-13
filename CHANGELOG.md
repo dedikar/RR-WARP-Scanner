@@ -2,6 +2,28 @@
 Сборка: `./build.sh` (автоинкремент через `version.txt`) или `./build.sh <версия>`.
 Собирается в `build/luci-app-rrws_<версия>_all.ipk`, бэкапы — в `backup_<timestamp>/`.
 
+## 0.2.1-r19
+- Юридическая атрибуция: в пакет добавлен MIT-текст warpscout
+  (`/usr/share/licenses/luci-app-rrws/warpscout-LICENSE`) и README обновлён
+  разделом «Атрибуция: warpscout (MIT)». warpscout (© 2026 Nikita S.)
+  лицензирован под MIT, наш проект — его переработка; MIT требует включить
+  копирайт-уведомление в копии/существенные части, это соблюдено.
+
+## 0.2.1-r18
+- Переименование в UI: пункт меню (`admin/services/rrws`) и заголовок страницы
+  теперь «RR WARP Scanner» (было «RRWS» / «RRWS — RouteRich WARP Scanner»).
+
+## 0.2.1-r17
+- Фикс UI теста скорости: поле «Эндпоинтов (1-N)» больше не позволяет ввести
+  число сверх фактического числа живых эндпоинтов из результата скана.
+  Причина — `clampInput(speedCountInput, 1, 40)` клампил к фиксированным 40,
+  игнорируя динамический cap из `refreshSpeedAvailable`; при вводе без потери
+  фокуса значение уходило в speedStart как есть. Теперь `clampInput` принимает
+  max как функцию (динамический потолок), `speedCountCap` синхронизируется с
+  `refreshSpeedAvailable`, и кнопка «Запустить тест» дополнительно клампит
+  значение в `[1, speedCountCap]`. Бэкенд уже резал по avail (luci.rrws:524) —
+  это была только защита UI.
+
 ## 0.2.1-r16
 - Потолок воркеров снижен 197 → 70: `JOBS_MAX` в ucode (клампы
   saveSettings/scanStart), `-gt 70` в wscan.sh, `max`/`clampInput`/подпись

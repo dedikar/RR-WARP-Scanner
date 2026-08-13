@@ -51,7 +51,7 @@ wsl -d Ubuntu-26.04 -- bash -lc "cd /mnt/c/Users/dedikar/warp && ./build.sh 0.2.
 (rpcd-mod-ucode и т.п.) — НОРМА, полная установка возможна только на 25.12.
 ```bash
 echo 123456 | sudo -S apk --root /tmp/apktest --initdb add 2>/dev/null
-apk add --simulate --allow-untrusted --force-non-repository /mnt/c/Users/dedikar/warp/build/luci-app-rrws-<ver>.apk
+apk add --root /tmp/apktest --simulate --allow-untrusted --force-non-repository /mnt/c/Users/dedikar/warp/build/luci-app-rrws-<ver>.apk
 ```
 
 ## Установка на роутер

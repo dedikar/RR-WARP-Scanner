@@ -69,7 +69,7 @@ Priority: optional
 Maintainer: RRWS <dev@route-rich.local>
 Architecture: all
 Installed-Size: 20
-Description: RRWS (RouteRich WARP Scanner) for AmneziaWG. Scan Cloudflare WARP endpoints via kernel AmneziaWG, pick the best and import it into the warp interface. LuCI page under Services -> RRWS.
+Description: RR WARP Scanner (luci-app-rrws) for AmneziaWG. Scan Cloudflare WARP endpoints via kernel AmneziaWG, pick the best and import it into the warp interface. LuCI page under Services -> RR WARP Scanner.
 EOF
 	# postinst: rpcd must pick up the new ucode object. reload (SIGHUP ->
 	# exec_self) re-scans /usr/share/rpcd/ucode/ AND keeps LuCI sessions alive,
@@ -118,7 +118,7 @@ EOF
 	"$APK_BIN" mkpkg \
 		--info "name:luci-app-rrws" \
 		--info "version:${VERSION}" \
-		--info "description:RRWS (RouteRich WARP Scanner) for AmneziaWG. Scan Cloudflare WARP endpoints via kernel AmneziaWG, pick the best and import it into the warp interface. LuCI page under Services -> RRWS." \
+		--info "description:RR WARP Scanner (luci-app-rrws) for AmneziaWG. Scan Cloudflare WARP endpoints via kernel AmneziaWG, pick the best and import it into the warp interface. LuCI page under Services -> RR WARP Scanner." \
 		--info "arch:noarch" \
 		--info "license:MIT" \
 		--info "origin:luci-app-rrws" \

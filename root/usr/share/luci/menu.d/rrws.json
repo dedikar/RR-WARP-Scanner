@@ -1,6 +1,6 @@
 {
 	"admin/services/rrws": {
-		"title": "RRWS",
+		"title": "RR WARP Scanner",
 		"order": 80,
 		"action": {
 			"type": "view",
