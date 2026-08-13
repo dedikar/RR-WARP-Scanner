@@ -463,8 +463,11 @@ if [ "$CODE" != "200" ]; then
   teardown_path
   exit 1
 fi
-ID=$(echo "$REG" | jq -r '.id' 2>/dev/null)
-TOKEN=$(echo "$REG" | jq -r '.token' 2>/dev/null)
+# API version differences: v0a4005 answers flat {id,token,...}, while newer
+# v0i1909051800 wraps everything in "result": {...}. (.result // .) picks the
+# right object for both so the rest of the script is version-agnostic.
+ID=$(echo "$REG" | jq -r '(.result // .).id' 2>/dev/null)
+TOKEN=$(echo "$REG" | jq -r '(.result // .).token' 2>/dev/null)
 if [ -z "$ID" ] || [ "$ID" = "null" ]; then
   log "FATAL: no 'id' in successful registration response"
   log "  body: $(echo "$REG" | head -c 500)"
@@ -484,8 +487,8 @@ if [ "$CODE" != "200" ] && [ "$CODE" != "204" ]; then
 fi
 rm -f /tmp/wr_patch /tmp/wr_patch.code /tmp/wr_patch.err
 
-PEER=$(echo "$REG" | jq -r '.config.peers[0].public_key')
-ADDR=$(echo "$REG" | jq -r '.config.interface.addresses.v4')
+PEER=$(echo "$REG" | jq -r '(.result // .).config.peers[0].public_key')
+ADDR=$(echo "$REG" | jq -r '(.result // .).config.interface.addresses.v4')
 log "peer=$PEER addr=$ADDR"
 
 ENABLED=false
@@ -495,7 +498,7 @@ fi
 
 echo "$REG" | jq --arg priv "$PRIV" --arg peer "$PEER" --arg addr "$ADDR" \
   --argjson enabled "$ENABLED" \
-  '{id: .id, token: .token, private_key: $priv, peer_public_key: $peer, address: $addr, warp_enabled: $enabled}' \
+  '{id: (.result // .).id, token: (.result // .).token, private_key: $priv, peer_public_key: $peer, address: $addr, warp_enabled: $enabled}' \
   > "${ACCOUNT_FILE}.tmp" && mv "${ACCOUNT_FILE}.tmp" "$ACCOUNT_FILE"
 log "account saved to $ACCOUNT_FILE"
 

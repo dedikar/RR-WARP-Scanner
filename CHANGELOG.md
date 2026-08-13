@@ -2,6 +2,16 @@
 Сборка: `./build.sh` (автоинкремент через `version.txt`) или `./build.sh <версия>`.
 Собирается в `build/luci-app-rrws_<версия>_all.ipk`, бэкапы — в `backup_<timestamp>/`.
 
+## 0.2.1-r23
+- Фикс: парсинг ответа API при fallback на `v0i1909051800`. Новый API-путь
+  оборачивает ответ в `"result": {...}` (id/token/config внутри), а старый
+  `v0a4005` отдаёт плоский JSON. Парсер теперь использует `(.result // .)` —
+  работает с обоими форматами. Без фикса API2 давал 200, но «FATAL: no id».
+  Проверено тестом: v0a4005 → 404 (подменённый путь) → retry v0i1909051800 →
+  200, аккаунт сохранён (id/token/peer/address/warp_enabled). Также проверена
+  QUIC I1-маска: handshake OK на первом эндпоинте (bootstrap с iCloud
+  первым, QUIC1 — резерв).
+
 ## 0.2.1-r22
 - Регистрация: запасные пути из warp-config-generator (llimonix).
   (1) Bootstrap-туннель перебирает I1-маски в порядке: iCloud-DNS (как было)

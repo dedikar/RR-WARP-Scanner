@@ -121,6 +121,10 @@ LuCI-приложение **RRWS (RouteRich WARP Scanner)** для OpenWrt-ро�
   (исключает build/, backup*, *.ipk), .gitattributes (LF для sh/ucode/js).
 
 ## Текущее состояние (2026-08-11)
+- Установлена 0.2.1-r23: фикс парсинга API2 (`v0i1909051800` оборачивает
+  ответ в `result:{}`, старый v0a4005 — плоский; парсер через `(.result // .)`
+  понимает оба). Найдено тестом: v0a4005→404→retry API2→200, аккаунт
+  сохранён. QUIC I1-маска проверена: handshake OK.
 - Установлена 0.2.1-r22: запасные пути регистрации из warp-config-generator
   (llimonix) — bootstrap перебирает I1-маски (iCloud → 2 QUIC), плюс
   fallback API-путь `v0i1909051800` при HTTP-ошибке v0a4005. Проверено
