@@ -121,6 +121,10 @@ LuCI-приложение **RRWS (RouteRich WARP Scanner)** для OpenWrt-ро�
   (исключает build/, backup*, *.ipk), .gitattributes (LF для sh/ucode/js).
 
 ## Текущее состояние (2026-08-11)
+- Установлена 0.2.1-r22: запасные пути регистрации из warp-config-generator
+  (llimonix) — bootstrap перебирает I1-маски (iCloud → 2 QUIC), плюс
+  fallback API-путь `v0i1909051800` при HTTP-ошибке v0a4005. Проверено
+  renewAccount: iCloud-I1 сработал первым, POST /reg=200, PATCH=200.
 - Установлена 0.2.1-r21: фикс счётчика discovery — total теперь
   `HOSTS + 3 + HOSTS*53` (полный перебор идёт на каждый пробный хост),
   done клампится на total. Проверено: 5 хостов → total 278, done 1→278,
