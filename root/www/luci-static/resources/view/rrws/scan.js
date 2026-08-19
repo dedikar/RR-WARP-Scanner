@@ -809,10 +809,10 @@ var view = this;
 
 		var jobsInput = E('input', {
 			'class': 'cbi-input-text', 'type': 'number', id: 'ws-jobs',
-			value: '3', min: '1', max: '70', style: 'width: 70px'
+			value: '3', min: '1', max: '50', style: 'width: 70px'
 		});
-		clampInput(jobsInput, 1, 70);
-		scanSection.appendChild(E('label', { 'for': 'ws-jobs' }, ' Потоков (1-70): '));
+		clampInput(jobsInput, 1, 50);
+		scanSection.appendChild(E('label', { 'for': 'ws-jobs' }, ' Потоков (1-50): '));
 		scanSection.appendChild(jobsInput);
 		scanSection.appendChild(document.createTextNode(' '));
 

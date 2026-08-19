@@ -47,7 +47,7 @@ done
 [ "$DISCOVER_HOSTS" -ge 1 ] 2>/dev/null || DISCOVER_HOSTS=2
 [ "$DISCOVER_HOSTS" -gt 10 ] && DISCOVER_HOSTS=10
 [ "$JOBS" -ge 1 ] 2>/dev/null || JOBS=1
-[ "$JOBS" -gt 70 ] && JOBS=70
+[ "$JOBS" -gt 50 ] && JOBS=50
 
 # key source: prefer account file, fall back to uci interface
 if [ -s "$ACCOUNT" ]; then
