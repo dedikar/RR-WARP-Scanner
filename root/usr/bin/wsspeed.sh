@@ -25,6 +25,26 @@ DL_BYTES=25000000 # 25 MB download chunk
 MAX_TIME=12       # curl cap per measurement
 I1="<r 2><b 0x858000010001000000000669636c6f756403636f6d0000010001c00c000100010000105a00044d583737>"
 
+# speed.cloudflare.com must be dialed by its REAL anycast IP, not by the
+# WARP FakeIP (198.18.x): through our raw tunnel a request to 198.18.x never
+# answers (http 000 / 0 kbit/s). Resolve via an external DNS to get a real
+# IPv4 (the router's own resolver returns the FakeIP too), fall back to a
+# known-good Cloudflare IP if resolution fails.
+SPEED_HOST="speed.cloudflare.com"
+SPEED_IP=""
+resolve_speed_ip() {
+  # nslookup host 1.1.1.1 -> last "Address:" line is an IPv4 answer
+  local a
+  a=$(nslookup "$SPEED_HOST" 1.1.1.1 2>/dev/null | awk '/^Address: / && $2 !~ /:/ {print $2}' | tail -1)
+  if [ -n "$a" ]; then
+    SPEED_IP="$a"
+  else
+    SPEED_IP="104.18.7.198"   # known-working Cloudflare anycast for speed test
+  fi
+  log "speed server: $SPEED_HOST -> $SPEED_IP"
+  return 0
+}
+
 log() { echo "[$(date +%H:%M:%S)] $*" >> "$LOG"; }
 
 usage() { echo "usage: wsspeed.sh [-n N] [-t sec] [-o file]" >&2; exit 1; }
@@ -49,6 +69,9 @@ PEER=$(jq -r '.peer_public_key' "$ACCOUNT" 2>/dev/null)
 [ -n "$PRIV" ] || { echo "no private_key in $ACCOUNT" >&2; exit 1; }
 [ -n "$PEER" ] || PEER="bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
 [ -s "$SRC" ] || { echo "no scan result: run a scan first ($SRC)" >&2; exit 1; }
+
+# resolve the real speed server IP before building any tunnel
+resolve_speed_ip
 
 # top N non-torn endpoints (torn flag is field 7, torn already sorted last)
 awk '$7 != "1" {print $1}' "$SRC" | head -n "$N" > /tmp/wsspeed.list
@@ -169,13 +192,15 @@ while read ep; do
   log "handshake OK for $ep"
 
   dl=$(curl -s --max-time "$MAX_TIME" --interface $IPLOCAL \
+    --resolve "$SPEED_HOST:443:$SPEED_IP" \
     -o /dev/null -w '%{speed_download}' \
-    "https://speed.cloudflare.com/__down?bytes=$DL_BYTES" 2>/dev/null)
+    "https://$SPEED_HOST/__down?bytes=$DL_BYTES" 2>/dev/null)
   [ -n "$dl" ] || dl=0
   ul=$(curl -s --max-time "$MAX_TIME" --interface $IPLOCAL \
+    --resolve "$SPEED_HOST:443:$SPEED_IP" \
     -o /dev/null -w '%{speed_upload}' -X POST \
     --data-binary @/tmp/wsspeed.upload.bin \
-    "https://speed.cloudflare.com/__up" 2>/dev/null)
+    "https://$SPEED_HOST/__up" 2>/dev/null)
   [ -n "$ul" ] || ul=0
   # bytes/sec -> kbit/s
   dlk=$(awk -v b="$dl" 'BEGIN{printf "%.0f", b*8/1000}')
