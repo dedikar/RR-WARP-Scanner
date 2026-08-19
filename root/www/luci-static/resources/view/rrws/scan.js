@@ -1211,7 +1211,7 @@ var view = this;
 				row.appendChild(E('code', { 'style': 'flex:1 1 auto; min-width:150px; word-break:break-all' }, it.endpoint || '?'));
 				var nm = (it.node || '') + (it.country ? ' ' + it.country : '');
 				if (nm)
-					row.appendChild(E('span', { 'class': 'label label-info', 'style': 'margin-right:8px' }, nm));
+					row.appendChild(E('span', { 'class': 'text-muted', 'style': 'margin-right:8px' }, nm));
 				var sd = '▼ ' + fmtSpeed(it.dl) + '  ▲ ' + fmtSpeed(it.ul);
 				row.appendChild(E('span', { 'class': 'text-muted' }, sd));
 				var btnGroup = E('div', { 'style': 'display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-left:auto; flex:0 0 auto' });
