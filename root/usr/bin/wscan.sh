@@ -71,7 +71,7 @@ PROGRESS="/tmp/wscan/progress"
 SCANNED="/tmp/wscan/scanned.cnt"
 SCANNED2="/tmp/wscan/scanned2.cnt"
 
-start_wg() {
+ start_wg() {
   local w="$1" IF="wgscan$w" IPLOCAL="$IPBASE.$((2+w))"
   ip link del $IF 2>/dev/null
   modprobe amneziawg 2>/dev/null
@@ -79,6 +79,19 @@ start_wg() {
   ip link set $IF up
   ip addr add $IPLOCAL/32 dev $IF 2>/dev/null
   amneziawg set $IF listen-port 0 private-key <(echo "$PRIV") peer "$PEER" allowed-ips 0.0.0.0/0
+  # policy routing: with several workers up at once, every interface has
+  # allowed-ips 0.0.0.0/0 and they all claim the main default route, so the
+  # kernel picks ONE of them - and "curl --interface <worker-ip>" for meta then
+  # walks the WRONG tunnel (always DME). Give each worker its own routing table
+  # and a rule that sends ONLY its source IP through its own tunnel, so the
+  # exit node/region is read through that exact endpoint (like wsspeed does).
+  # Tables: 200 + worker index -> 200..269 (fits the 253-table budget with 70
+  # workers). prio 98 so it wins over the router's own default without
+  # disturbing main traffic.
+  wgtbl=$((200 + w))
+  ip route add default dev $IF table $wgtbl 2>/dev/null
+  ip rule add from $IPLOCAL/32 lookup $wgtbl prio 98 2>/dev/null
+  echo $wgtbl
 }
 
 # set endpoint and wait for a handshake FRESHER than $last.
@@ -235,7 +248,8 @@ worker() {
   local w="$1" IF="wgscan$w" IPLOCAL="$IPBASE.$((2+w))"
   local hostfile="/tmp/wscan/hosts.$w.txt" alivefile="/tmp/wscan/alive.$w.txt"
   local ip ep port hs now last rtt ok meta colo loc count
-  start_wg "$w" || return
+  local wgtbl
+  wgtbl=$(start_wg "$w") || return
   last=0
   count=0
   while read ip; do
@@ -256,49 +270,53 @@ worker() {
 
   # ---- worker phase 2: honest RTT + meta + in-tunnel probe for its survivors ----
   echo "phase2" > $PROGRESS
-  [ -s "$alivefile" ] || { ip link del $IF 2>/dev/null; return 0; }
-  while read ep; do
-    [ -z "$ep" ] && continue
-    ip=${ep%:*}
-    # shared phase-2 progress across workers
-    echo 1 >> "$SCANNED2"
-    echo "phase2:$(wc -l < "$SCANNED2")" > $PROGRESS
-    # latency to the endpoint host, independent of tunnel/TLS
-    rtt=$(host_rtt "$ip")
-    [ -n "$rtt" ] || continue
-    # verify real handshake still works on this exact endpoint
-    amneziawg set $IF peer "$PEER" remove 2>/dev/null
-    amneziawg set $IF peer "$PEER" allowed-ips 0.0.0.0/0 endpoint "$ep" persistent-keepalive 5 2>/dev/null
-    ok=""
-    for i in 1 2 3; do
-      hs=$(amneziawg show $IF latest-handshakes 2>/dev/null | awk -v p="$PEER" '$1==p{print $2;exit}')
-      now=$(date +%s)
-      if [ -n "$hs" ] && [ $((now-hs)) -lt 5 ]; then
-        ok=1
-        break
+  if [ -s "$alivefile" ]; then
+    while read ep; do
+      [ -z "$ep" ] && continue
+      ip=${ep%:*}
+      # shared phase-2 progress across workers
+      echo 1 >> "$SCANNED2"
+      echo "phase2:$(wc -l < "$SCANNED2")" > $PROGRESS
+      # latency to the endpoint host, independent of tunnel/TLS
+      rtt=$(host_rtt "$ip")
+      [ -n "$rtt" ] || continue
+      # verify real handshake still works on this exact endpoint
+      amneziawg set $IF peer "$PEER" remove 2>/dev/null
+      amneziawg set $IF peer "$PEER" allowed-ips 0.0.0.0/0 endpoint "$ep" persistent-keepalive 5 2>/dev/null
+      ok=""
+      for i in 1 2 3; do
+        hs=$(amneziawg show $IF latest-handshakes 2>/dev/null | awk -v p="$PEER" '$1==p{print $2;exit}')
+        now=$(date +%s)
+        if [ -n "$hs" ] && [ $((now-hs)) -lt 5 ]; then
+          ok=1
+          break
+        fi
+        sleep 1
+      done
+      [ -n "$ok" ] || continue
+      meta=$(trace_meta "$IPLOCAL")
+      if [ -n "$meta" ]; then
+        colo=$(echo "$meta" | cut -d'|' -f1)
+        loc=$(echo "$meta" | cut -d'|' -f2)
+        # in-tunnel burst: TUN PING, LOSS, torn-down detection
+        tp=$(tun_probe "$IPLOCAL")
+        if [ -n "$tp" ]; then
+          tprtt=$(echo "$tp" | cut -d' ' -f1)
+          tploss=$(echo "$tp" | cut -d' ' -f2)
+          tptorn=$(echo "$tp" | cut -d' ' -f3)
+        else
+          tprtt="?"
+          tploss="?"
+          tptorn="?"
+        fi
+        echo "$ep $colo $loc ${rtt} ${tprtt} ${tploss} ${tptorn}" >> "$OUT"
       fi
-      sleep 1
-    done
-    [ -n "$ok" ] || continue
-    meta=$(trace_meta "$IPLOCAL")
-    if [ -n "$meta" ]; then
-      colo=$(echo "$meta" | cut -d'|' -f1)
-      loc=$(echo "$meta" | cut -d'|' -f2)
-      # in-tunnel burst: TUN PING, LOSS, torn-down detection
-      tp=$(tun_probe "$IPLOCAL")
-      if [ -n "$tp" ]; then
-        tprtt=$(echo "$tp" | cut -d' ' -f1)
-        tploss=$(echo "$tp" | cut -d' ' -f2)
-        tptorn=$(echo "$tp" | cut -d' ' -f3)
-      else
-        tprtt="?"
-        tploss="?"
-        tptorn="?"
-      fi
-      echo "$ep $colo $loc ${rtt} ${tprtt} ${tploss} ${tptorn}" >> "$OUT"
-    fi
-  done < "$alivefile"
+    done < "$alivefile"
+  fi
 
+  # teardown: drop the per-worker rule/route, then the interface
+  [ -n "$wgtbl" ] && ip rule del from $IPLOCAL/32 lookup $wgtbl prio 98 2>/dev/null
+  [ -n "$wgtbl" ] && ip route del default dev $IF table $wgtbl 2>/dev/null
   ip link del $IF 2>/dev/null
 }
 
