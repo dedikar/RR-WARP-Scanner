@@ -1209,6 +1209,9 @@ var view = this;
 				var it = items[si];
 				var row = E('div', { 'class': 'cbi-section', 'style': 'display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:4px 0; padding:6px 8px; border:1px solid #444; border-radius:4px' });
 				row.appendChild(E('code', { 'style': 'flex:1 1 auto; min-width:150px; word-break:break-all' }, it.endpoint || '?'));
+				var nm = (it.node || '') + (it.country ? ' ' + it.country : '');
+				if (nm)
+					row.appendChild(E('span', { 'class': 'label label-info', 'style': 'margin-right:8px' }, nm));
 				var sd = '▼ ' + fmtSpeed(it.dl) + '  ▲ ' + fmtSpeed(it.ul);
 				row.appendChild(E('span', { 'class': 'text-muted' }, sd));
 				var btnGroup = E('div', { 'style': 'display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-left:auto; flex:0 0 auto' });
@@ -1248,7 +1251,7 @@ var view = this;
 					else
 						txt += st.phase || '';
 					speedStatusEl.textContent = txt;
-					var pct = st.total > 0 ? Math.floor((st.index - 1) * 100 / st.total) : 0;
+					var pct = st.total > 0 ? Math.floor(st.index * 100 / st.total) : 0;
 					if (pct < 0) pct = 0;
 					speedProgressEl.style.display = '';
 					speedProgressBar.style.width = pct + '%';

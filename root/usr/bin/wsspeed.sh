@@ -73,8 +73,10 @@ PEER=$(jq -r '.peer_public_key' "$ACCOUNT" 2>/dev/null)
 # resolve the real speed server IP before building any tunnel
 resolve_speed_ip
 
-# top N non-torn endpoints (torn flag is field 7, torn already sorted last)
-awk '$7 != "1" {print $1}' "$SRC" | head -n "$N" > /tmp/wsspeed.list
+# top N non-torn endpoints (torn flag is field 7, torn already sorted last);
+# keep the node (field 2) and country (field 3) so the UI can show where each
+# tested endpoint sits (e.g. "WAW RU")
+awk '$7 != "1" {print $1, $2, $3}' "$SRC" | head -n "$N" > /tmp/wsspeed.list
 TOTAL=$(wc -l < /tmp/wsspeed.list)
 if [ "$TOTAL" -lt 1 ]; then
   echo "no working endpoints to test" >&2
@@ -173,19 +175,19 @@ teardown() {
 }
 
 i=0
-while read ep; do
+while read ep node loc; do
   [ -z "$ep" ] && continue
   i=$((i+1))
-  echo "$i/$TOTAL $ep" > "$PROGRESS"
-  log "test $i/$TOTAL: $ep"
+  echo "$i/$TOTAL $ep ($node $loc)" > "$PROGRESS"
+  log "test $i/$TOTAL: $ep ($node $loc)"
   if ! start_if "$ep"; then
     log "cannot create interface, skipping $ep"
-    echo "$ep 0 0" >> "$OUT"
+    echo "$ep $node $loc 0 0" >> "$OUT"
     continue
   fi
   if ! wait_hs; then
     log "no handshake for $ep, skipping"
-    echo "$ep 0 0" >> "$OUT"
+    echo "$ep $node $loc 0 0" >> "$OUT"
     teardown
     continue
   fi
@@ -205,8 +207,8 @@ while read ep; do
   # bytes/sec -> kbit/s
   dlk=$(awk -v b="$dl" 'BEGIN{printf "%.0f", b*8/1000}')
   ulk=$(awk -v b="$ul" 'BEGIN{printf "%.0f", b*8/1000}')
-  log "result $ep dl=${dlk} kbit/s ul=${ulk} kbit/s"
-  echo "$ep $dlk $ulk" >> "$OUT"
+  log "result $ep ($node $loc) dl=${dlk} kbit/s ul=${ulk} kbit/s"
+  echo "$ep $node $loc $dlk $ulk" >> "$OUT"
   teardown
 done < /tmp/wsspeed.list
 

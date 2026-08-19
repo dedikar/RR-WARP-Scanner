@@ -156,10 +156,32 @@ scanResult (UI) ← /tmp/wscan_result.txt (or the saved one when absent)
 ```
 
 The tunnel exit is captured via `curl https://1.1.1.1/cdn-cgi/trace` inside
-the tunnel — the `colo|loc` fields (exit node/country). Important: the exit
-country is tied to the account and WARP routing, not to the endpoint server.
-On networks with filtering (e.g. RU) any anycast Cloudflare endpoint may
-resolve to the same node, so all results have one exit — that is normal.
+the tunnel — the `colo|loc` fields (exit node/country).
+
+## Node (NODE) vs country (COUNTRY)
+
+Each endpoint carries two fields that are easy to confuse:
+
+- **NODE** — the Cloudflare edge node you connect to (the entry point,
+  airport code: DME=Moscow, WAW=Warsaw, AMS=Amsterdam, FRA=Frankfurt,
+  ARN=Stockholm). It depends on where the endpoint routes from your network.
+- **COUNTRY (SEEN AS)** — the country external sites see your traffic coming
+  from (the WARP exit). It is set by WARP account routing, **not** by the
+  entry node.
+
+**You can connect to Warsaw (WAW) and still "exit" from Russia.** The entry
+node and the exit country are different things: the tunnel can enter Warsaw
+while Cloudflare routes the traffic out through a Russian node. So "I picked a
+WAW RU config and sites still see me as RU" is normal, not a bug.
+
+Then why exclude DME? The entry node affects **DPI filtering**: traffic through
+the Moscow node (DME) is filtered inside Russia (some sites do not load), while
+foreign nodes (WAW/AMS/FRA/ARN) are not — even when the exit country is still
+RU. The "Exclude DME node" option removes that filtered Moscow node so the
+endpoints load reliably.
+
+If the goal is for sites to see **not RU**, choosing an endpoint/node will not
+help: you need a different entry point (e.g. a VPS abroad).
 
 ## Result format
 
