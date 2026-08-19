@@ -71,31 +71,89 @@ PROGRESS="/tmp/wscan/progress"
 SCANNED="/tmp/wscan/scanned.cnt"
 SCANNED2="/tmp/wscan/scanned2.cnt"
 
- start_wg() {
-  local w="$1" IF="wgscan$w" IPLOCAL="$IPBASE.$((2+w))"
+# Full obfuscation set for the scan interfaces. Applied via setconf (NOT
+# `amneziawg set`): on this kmod mutating a live obfuscated interface (peer
+# remove/add/endpoint) crashes the box (kernel oops), and non-obfuscated
+# tunnels are torn down by DPI right after handshake (rx=0, so trace_meta and
+# any data never flow). Building the whole [Interface]+[Peer] with the endpoint
+# baked in and re-creating the interface per endpoint is the only stable way.
+WSC_JC="6"; WSC_JMIN="10"; WSC_JMAX="50"
+WSC_I1="<r 2><b 0x858000010001000000000669636c6f756403636f6d0000010001c00c000100010000105a00044d583737>"
+
+# create an obfuscated amneziawg interface $IF for endpoint $ep with source
+# IP $IPLOCAL, and install policy routing (own table + rule) so traffic from
+# $IPLOCAL goes through THIS tunnel only. Endpoint is baked into the config.
+# Usage: start_wg_ep IF IPLOCAL TABLE ep   (echoes nothing; returns 0/1)
+start_wg_ep() {
+  local IF="$1" IPLOCAL="$2" TBL="$3" ep="$4"
   ip link del $IF 2>/dev/null
   modprobe amneziawg 2>/dev/null
-  ip link add dev $IF type amneziawg || return 1
+  ip link add dev $IF type amneziawg 2>/dev/null || return 1
+  ip link set $IF mtu 1280
   ip link set $IF up
   ip addr add $IPLOCAL/32 dev $IF 2>/dev/null
-  amneziawg set $IF listen-port 0 private-key <(echo "$PRIV") peer "$PEER" allowed-ips 0.0.0.0/0
-  # policy routing: with several workers up at once, every interface has
-  # allowed-ips 0.0.0.0/0 and they all claim the main default route, so the
-  # kernel picks ONE of them - and "curl --interface <worker-ip>" for meta then
-  # walks the WRONG tunnel (always DME). Give each worker its own routing table
-  # and a rule that sends ONLY its source IP through its own tunnel, so the
-  # exit node/region is read through that exact endpoint (like wsspeed does).
-  # Tables: 200 + worker index -> 200..269 (fits the 253-table budget with 70
-  # workers). prio 98 so it wins over the router's own default without
-  # disturbing main traffic.
-  wgtbl=$((200 + w))
-  ip route add default dev $IF table $wgtbl 2>/dev/null
-  ip rule add from $IPLOCAL/32 lookup $wgtbl prio 98 2>/dev/null
-  echo $wgtbl
+  cat > /tmp/wscan.conf <<EOF
+[Interface]
+PrivateKey=$PRIV
+Jc=$WSC_JC
+Jmin=$WSC_JMIN
+Jmax=$WSC_JMAX
+S1=0
+S2=0
+S3=0
+S4=0
+H1=1
+H2=2
+H3=3
+H4=4
+I1=$WSC_I1
+
+[Peer]
+PublicKey=$PEER
+AllowedIPs=0.0.0.0/0
+Endpoint=$ep
+PersistentKeepalive=5
+EOF
+  amneziawg setconf $IF /tmp/wscan.conf 2>/dev/null
+  local rc=$?
+  rm -f /tmp/wscan.conf
+  [ "$rc" -ne 0 ] && { ip link del $IF 2>/dev/null; return 1; }
+  ip route add default dev $IF table $TBL 2>/dev/null
+  ip rule add from $IPLOCAL/32 lookup $TBL prio 98 2>/dev/null
+  return 0
 }
 
-# set endpoint and wait for a handshake FRESHER than $last.
+# teardown: drop rule/route then interface
+teardown_wg() {
+  local IF="$1" IPLOCAL="$2" TBL="$3"
+  ip rule del from $IPLOCAL/32 lookup $TBL prio 98 2>/dev/null
+  ip route del default dev $IF table $TBL 2>/dev/null
+  ip link del $IF 2>/dev/null
+}
+
+# bring up an obfuscated interface to $ep and wait for a fresh handshake.
+# Usage: try_endpoint IF IPLOCAL TABLE ep n last -> 0/1
 try_endpoint() {
+  local IF="$1" IPLOCAL="$2" TBL="$3" ep="$4" n="$5" last="$6"
+  local i hs now
+  start_wg_ep "$IF" "$IPLOCAL" "$TBL" "$ep" || return 1
+  for i in $(seq 1 "$n"); do
+    hs=$(amneziawg show $IF latest-handshakes 2>/dev/null | awk -v p="$PEER" '$1==p{print $2;exit}')
+    now=$(date +%s)
+    if [ -n "$hs" ] && [ "$hs" -gt "$last" ] && [ $((now-hs)) -lt 3 ]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+# handshake-only probe on a PERSISTENT (non-obfuscated) interface - used by the
+# port-discovery phase, which only needs to know whether a UDP port answers a
+# handshake (data never needs to flow). Kept non-obfuscated and on a fixed
+# interface because discovery sweeps hundreds of (host,port) combos and would
+# be too slow to re-create a tunnel each time.
+try_hs() {
   local ep="$1" n="$2" i hs now last="$3" IF="$4"
   amneziawg set $IF peer "$PEER" remove 2>/dev/null
   amneziawg set $IF peer "$PEER" allowed-ips 0.0.0.0/0 endpoint "$ep" persistent-keepalive 5 2>/dev/null
@@ -144,7 +202,7 @@ discover_ports() {
   # keep the default port list (no prep-paid sweep). This costs ~2s.
   for host in $(head -n $DISCOVER_HOSTS /tmp/wscan/hosts.txt); do
     [ -n "$host" ] || { dp; continue; }
-    if try_endpoint "$host:2408" 3 0 "$PIF"; then
+    if try_hs "$host:2408" 3 0 "$PIF"; then
       ok=1
       log "discovery: $host:2408 works"
       break
@@ -162,7 +220,7 @@ discover_ports() {
     for port in 1701 4500 500; do
       for host2 in $(head -n $DISCOVER_HOSTS /tmp/wscan/hosts.txt); do
         [ -n "$host2" ] || continue
-        if try_endpoint "$host2:$port" 2 0 "$PIF"; then
+        if try_hs "$host2:$port" 2 0 "$PIF"; then
           found_ports="$found_ports $port"
           log "discovery: $host2:$port works (fallback)"
           break
@@ -177,7 +235,7 @@ discover_ports() {
       for host2 in $(head -n $DISCOVER_HOSTS /tmp/wscan/hosts.txt); do
         [ -n "$host2" ] || continue
         for port in $ALL_PORTS; do
-          if try_endpoint "$host2:$port" 1 0 "$PIF"; then
+          if try_hs "$host2:$port" 1 0 "$PIF"; then
             found_ports="$found_ports $port"
             log "discovery: $host2:$port works (full sweep)"
             dp
@@ -243,13 +301,14 @@ trace_meta() {
 }
 
 # one parallel worker: sweeps its share of hosts, then does RTT+meta for the
-# survivors it found. Each worker owns interface wgscan$w / IP 172.16.7.(2+w).
+# survivors it found. Each worker owns interface wgscan$w / IP 172.16.7.(2+w)
+# with its own routing table 200+w; tunnels are OBFUSCATED (setconf) and
+# re-created per endpoint, because a live obfuscated interface must not be
+# mutated and non-obfuscated ones are torn by DPI (no data, no real node).
 worker() {
-  local w="$1" IF="wgscan$w" IPLOCAL="$IPBASE.$((2+w))"
+  local w="$1" IF="wgscan$w" IPLOCAL="$IPBASE.$((2+w))" TBL=$((200+w))
   local hostfile="/tmp/wscan/hosts.$w.txt" alivefile="/tmp/wscan/alive.$w.txt"
   local ip ep port hs now last rtt ok meta colo loc count
-  local wgtbl
-  wgtbl=$(start_wg "$w") || return
   last=0
   count=0
   while read ip; do
@@ -259,7 +318,7 @@ worker() {
     echo 1 >> "$SCANNED"
     echo "phase1:$(wc -l < "$SCANNED"):$TOTAL" > $PROGRESS
     for port in $PORTS; do
-      if try_endpoint "$ip:$port" "$HS_SWEEP" "$last" "$IF"; then
+      if try_endpoint "$IF" "$IPLOCAL" "$TBL" "$ip:$port" "$HS_SWEEP" "$last"; then
         echo "$ip:$port" >> "$alivefile"
         log "alive: $ip:$port (worker $w, host #$count)"
         last=$(amneziawg show $IF latest-handshakes 2>/dev/null | awk -v p="$PEER" '$1==p{print $2;exit}')
@@ -280,20 +339,12 @@ worker() {
       # latency to the endpoint host, independent of tunnel/TLS
       rtt=$(host_rtt "$ip")
       [ -n "$rtt" ] || continue
-      # verify real handshake still works on this exact endpoint
-      amneziawg set $IF peer "$PEER" remove 2>/dev/null
-      amneziawg set $IF peer "$PEER" allowed-ips 0.0.0.0/0 endpoint "$ep" persistent-keepalive 5 2>/dev/null
-      ok=""
-      for i in 1 2 3; do
-        hs=$(amneziawg show $IF latest-handshakes 2>/dev/null | awk -v p="$PEER" '$1==p{print $2;exit}')
-        now=$(date +%s)
-        if [ -n "$hs" ] && [ $((now-hs)) -lt 5 ]; then
-          ok=1
-          break
-        fi
-        sleep 1
-      done
-      [ -n "$ok" ] || continue
+      # re-create the obfuscated tunnel to THIS exact endpoint and verify data
+      # actually flows (fresh handshake) before reading its node/region.
+      if ! try_endpoint "$IF" "$IPLOCAL" "$TBL" "$ep" 3 "$last"; then
+        continue
+      fi
+      last=$(amneziawg show $IF latest-handshakes 2>/dev/null | awk -v p="$PEER" '$1==p{print $2;exit}')
       meta=$(trace_meta "$IPLOCAL")
       if [ -n "$meta" ]; then
         colo=$(echo "$meta" | cut -d'|' -f1)
@@ -314,10 +365,7 @@ worker() {
     done < "$alivefile"
   fi
 
-  # teardown: drop the per-worker rule/route, then the interface
-  [ -n "$wgtbl" ] && ip rule del from $IPLOCAL/32 lookup $wgtbl prio 98 2>/dev/null
-  [ -n "$wgtbl" ] && ip route del default dev $IF table $wgtbl 2>/dev/null
-  ip link del $IF 2>/dev/null
+  teardown_wg "$IF" "$IPLOCAL" "$TBL"
 }
 
 # host list generator: interleave subnets so the first HOSTS_MAX lines
