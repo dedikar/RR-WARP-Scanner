@@ -375,22 +375,24 @@ wait
 
 # collect survivors + sort by ping (torn-down endpoints sink to the bottom,
 # matching warpScout: they are shown, but never picked as best). Endpoints on
-# excluded nodes (e.g. DME) are ranked below working non-excluded ones, so the
-# best pick prefers a different node when one exists.
+# excluded nodes (e.g. DME) are DROPPED entirely from the result, so they never
+# show up in the table or as .conf - the exclusion is global.
 cat /tmp/wscan/alive.*.txt 2>/dev/null > /tmp/wscan/alive.txt
 ALIVE=$(wc -l < /tmp/wscan/alive.txt)
 if [ -s "$OUT" ]; then
   # field order: ep colo loc rtt tun_rtt tun_loss torn (1 = torn down)
   if [ -n "$EXCLUDE_NODES" ]; then
-    # rank: 2=torn, 1=working but excluded node, 0=working preferred node
+    # drop excluded-node rows (awk $2 = node); keep torn even if on an excluded
+    # node is pointless - torn is dropped by applyBest anyway, so filter by node
+    # first, then sort the survivors
     awk -v en="$EXCLUDE_NODES" '
       function in_excl(n,  arr, i) {
         split(en, arr, " ");
         for (i in arr) if (arr[i] == n) return 1;
         return 0;
       }
-      { key=($7=="1"?"2":(in_excl($2)?"1":"0"))" "$4" "; print key $0 }' "$OUT" \
-      | sort -n | sed 's/^[012] [0-9.]* //' > /tmp/wscan_result_sorted.txt
+      !in_excl($2) { key=($7=="1"?"1":"0")" "$4" "; print key $0 }' "$OUT" \
+      | sort -n | sed 's/^[01] [0-9.]* //' > /tmp/wscan_result_sorted.txt
   else
     awk '{key=($7=="1"?"1":"0")" "$4" "; print key $0}' "$OUT" \
       | sort -n | sed 's/^[01] [0-9.]* //' > /tmp/wscan_result_sorted.txt
