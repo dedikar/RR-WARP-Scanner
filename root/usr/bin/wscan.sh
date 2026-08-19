@@ -22,11 +22,12 @@ OUT="/tmp/wscan_result.txt"
 TUN_PING_C=5      # echo burst size inside the tunnel (for TUN PING / LOSS)
 TEAR_RUN=2        # trailing lost echoes >= this => endpoint marked "torn down"
 
-usage() { echo "usage: wscan.sh [-w iface] [-n N] [-t sec] [-j N] [-p ports] [-o file] [-f] [-D] [-P N] [-x 'subnet ...']" >&2; exit 1; }
+usage() { echo "usage: wscan.sh [-w iface] [-n N] [-t sec] [-j N] [-p ports] [-o file] [-f] [-D] [-P N] [-x 'subnet ...'] [-e 'NODE ...']" >&2; exit 1; }
 FULL=0
 DISCOVER=0
 DISCOVER_HOSTS=2
 EXCLUDE=""
+EXCLUDE_NODES=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -w) IF_WARP="$2"; shift 2;;
@@ -39,6 +40,7 @@ while [ $# -gt 0 ]; do
     -D) DISCOVER=1; shift 1;;
     -P) DISCOVER_HOSTS="$2"; shift 2;;
     -x) EXCLUDE="$2"; shift 2;;
+    -e) EXCLUDE_NODES="$2"; shift 2;;
     *) usage;;
   esac
 done
@@ -372,13 +374,27 @@ done
 wait
 
 # collect survivors + sort by ping (torn-down endpoints sink to the bottom,
-# matching warpScout: they are shown, but never picked as best)
+# matching warpScout: they are shown, but never picked as best). Endpoints on
+# excluded nodes (e.g. DME) are ranked below working non-excluded ones, so the
+# best pick prefers a different node when one exists.
 cat /tmp/wscan/alive.*.txt 2>/dev/null > /tmp/wscan/alive.txt
 ALIVE=$(wc -l < /tmp/wscan/alive.txt)
 if [ -s "$OUT" ]; then
   # field order: ep colo loc rtt tun_rtt tun_loss torn (1 = torn down)
-  awk '{key=($7=="1"?"1":"0")" "$4" "; print key $0}' "$OUT" \
-    | sort -n | sed 's/^[01] [0-9.]* //' > /tmp/wscan_result_sorted.txt
+  if [ -n "$EXCLUDE_NODES" ]; then
+    # rank: 2=torn, 1=working but excluded node, 0=working preferred node
+    awk -v en="$EXCLUDE_NODES" '
+      function in_excl(n,  arr, i) {
+        split(en, arr, " ");
+        for (i in arr) if (arr[i] == n) return 1;
+        return 0;
+      }
+      { key=($7=="1"?"2":(in_excl($2)?"1":"0"))" "$4" "; print key $0 }' "$OUT" \
+      | sort -n | sed 's/^[012] [0-9.]* //' > /tmp/wscan_result_sorted.txt
+  else
+    awk '{key=($7=="1"?"1":"0")" "$4" "; print key $0}' "$OUT" \
+      | sort -n | sed 's/^[01] [0-9.]* //' > /tmp/wscan_result_sorted.txt
+  fi
   mv /tmp/wscan_result_sorted.txt "$OUT"
 fi
 echo "done" > $PROGRESS

@@ -100,7 +100,7 @@ var callAppVersion = rrwsDeclare({
 var callScanStart = rrwsDeclare({
 	object: 'luci.rrws',
 	method: 'scanStart',
-	params: [ 'hosts', 'timeout', 'mode', 'jobs', 'discover', 'discover_hosts', 'exclude' ]
+	params: [ 'hosts', 'timeout', 'mode', 'jobs', 'discover', 'discover_hosts', 'exclude', 'exclude_nodes' ]
 });
 
 var callScanStatus = rrwsDeclare({
@@ -162,7 +162,7 @@ var callGetSettings = rrwsDeclare({
 var callSaveSettings = rrwsDeclare({
 	object: 'luci.rrws',
 	method: 'saveSettings',
-	params: [ 'hosts', 'timeout', 'jobs', 'discover', 'discover_hosts', 'exclude' ]});
+	params: [ 'hosts', 'timeout', 'jobs', 'discover', 'discover_hosts', 'exclude', 'exclude_nodes' ]});
 
 var uiStore = function(key, val) {
 	try { window.localStorage.setItem('rrws.' + key, val ? '1' : '0'); }
@@ -921,7 +921,8 @@ var view = this;
 			var discover = discInput.checked ? 1 : 0;
 			var dhosts = parseInt(discHostsInput.value, 10) || 2;
 			var exclude = getExclude();
-			callSaveSettings(hosts, timeout, jobs, discover, dhosts, exclude);
+			var excludeNodes = getExcludeNodes();
+			callSaveSettings(hosts, timeout, jobs, discover, dhosts, exclude, excludeNodes);
 			resultEl.innerHTML = '';
 			statusLine(statusEl, 'Запуск...');
 			progressBar.style.width = '0%';
@@ -932,7 +933,7 @@ var view = this;
 			stopBtn.disabled = false;
 			stopBtn.textContent = 'Остановить';
 			startLogAutoRefresh();
-			callScanStart(hosts, timeout, mode, jobs, discover, dhosts, exclude).then(function(res) {
+			callScanStart(hosts, timeout, mode, jobs, discover, dhosts, exclude, excludeNodes).then(function(res) {
 				console.log('[rrws] scanStart:', JSON.stringify(res));
 				if (res.error) {
 					statusLine(statusEl, 'Ошибка: ' + res.error, true);
@@ -1060,6 +1061,14 @@ var view = this;
 			});
 		};
 
+		// exclude DME node: on RU provider networks DME (Moscow) is DPI-filtered,
+		// so the best pick should prefer a different node when one exists.
+		var exclNodeSection = E('div', { 'style': 'margin-top:10px; display:flex; align-items:center; gap:8px' });
+		var exclNodeInput = E('input', { 'type': 'checkbox', id: 'ws-excl-node', style: 'margin:0' });
+		exclNodeSection.appendChild(exclNodeInput);
+		exclNodeSection.appendChild(E('label', { 'for': 'ws-excl-node' }, 'Исключить узел DME (Москва) при выборе лучшего'));
+		exclSection.appendChild(exclNodeSection);
+
 		// restore persisted scan settings (hosts / timeout / jobs / discovery)
 		var persistCurrent = function() {
 			var h = parseInt(hostsInput.value, 10) || 40;
@@ -1067,13 +1076,18 @@ var view = this;
 			var j = parseInt(jobsInput.value, 10) || 3;
 			var d = discInput.checked ? 1 : 0;
 			var dh = parseInt(discHostsInput.value, 10) || 2;
-			callSaveSettings(h, t, j, d, dh, getExclude());
+			callSaveSettings(h, t, j, d, dh, getExclude(), getExcludeNodes());
 		};
 		hostsInput.addEventListener('change', persistCurrent);
 		timeoutInput.addEventListener('change', persistCurrent);
 		jobsInput.addEventListener('change', persistCurrent);
 		discInput.addEventListener('change', persistCurrent);
 		discHostsInput.addEventListener('change', persistCurrent);
+		exclNodeInput.addEventListener('change', persistCurrent);
+
+		var getExcludeNodes = function() {
+			return exclNodeInput.checked ? [ 'DME' ] : [];
+		};
 
 		callGetSettings().then(function(s) {
 			if (!s) return;
@@ -1087,6 +1101,8 @@ var view = this;
 			buildExcl(s.subnets);
 			if (exclWidget && s.exclude && s.exclude.length)
 				exclWidget.setValue(s.exclude);
+			if (s.exclude_nodes && s.exclude_nodes.indexOf('DME') >= 0)
+				exclNodeInput.checked = true;
 		}).catch(function(e) {
 			console.error('[rrws] getSettings err', e.message);
 		});

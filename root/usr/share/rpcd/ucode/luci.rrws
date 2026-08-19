@@ -64,6 +64,23 @@ function valid_subnets(list) {
 	return out;
 }
 
+// edge node codes (e.g. DME, ARN, AMS): uppercase letters/digits, deduped
+function valid_nodes(list) {
+	let out = [];
+	for (let i = 0; i < length(list); i++) {
+		const s = trim(list[i] ?? '');
+		if (!s) continue;
+		// airports/colo codes are [A-Z0-9]{3,4}; reject anything else
+		if (match(s, /^[A-Z0-9]{3,4}$/) == null) continue;
+		let dup = false;
+		for (let j = 0; j < length(out); j++)
+			if (out[j] == s) { dup = true; break; }
+		if (!dup)
+			push(out, s);
+	}
+	return out;
+}
+
 function shellquote(s) {
 	return `'${replace(s ?? '', "'", "'\\''")}'`;
 }
@@ -282,7 +299,7 @@ const methods = {
 	},
 
 	saveSettings: {
-		args: { hosts: 0, timeout: 0, jobs: 0, discover: 0, discover_hosts: 0, exclude: [] },
+		args: { hosts: 0, timeout: 0, jobs: 0, discover: 0, discover_hosts: 0, exclude: [], exclude_nodes: [] },
 		call: function(req) {
 			const s = {
 				hosts: max(1, min(int(req.args?.hosts ?? 40), HOSTS_MAX)),
@@ -290,7 +307,8 @@ const methods = {
 				jobs: max(1, min(int(req.args?.jobs ?? 3), JOBS_MAX)),
 				discover: int(req.args?.discover) == 1 ? 1 : 0,
 				discover_hosts: max(1, min(int(req.args?.discover_hosts ?? 2), 10)),
-				exclude: valid_subnets(req.args?.exclude ?? [])
+				exclude: valid_subnets(req.args?.exclude ?? []),
+				exclude_nodes: valid_nodes(req.args?.exclude_nodes ?? [])
 			};
 			let exclJson = '';
 			for (let i = 0; i < length(s.exclude); i++)
@@ -298,10 +316,16 @@ const methods = {
 			let exclLog = '';
 			for (let i = 0; i < length(s.exclude); i++)
 				exclLog += (i ? ' ' : '') + s.exclude[i];
-			const body = `{"hosts":${s.hosts},"timeout":${s.timeout},"jobs":${s.jobs},"discover":${s.discover},"discover_hosts":${s.discover_hosts},"exclude":[${exclJson}]}`;
+			let enJson = '';
+			for (let i = 0; i < length(s.exclude_nodes); i++)
+				enJson += (i ? ',' : '') + `"${s.exclude_nodes[i]}"`;
+			let enLog = '';
+			for (let i = 0; i < length(s.exclude_nodes); i++)
+				enLog += (i ? ' ' : '') + s.exclude_nodes[i];
+			const body = `{"hosts":${s.hosts},"timeout":${s.timeout},"jobs":${s.jobs},"discover":${s.discover},"discover_hosts":${s.discover_hosts},"exclude":[${exclJson}],"exclude_nodes":[${enJson}]}`;
 			try {
 				writefile(SETTINGS, body);
-				rpclog('saveSettings', `hosts=${s.hosts} timeout=${s.timeout} jobs=${s.jobs} discover=${s.discover} discover_hosts=${s.discover_hosts} exclude=[${exclLog}]`);
+				rpclog('saveSettings', `hosts=${s.hosts} timeout=${s.timeout} jobs=${s.jobs} discover=${s.discover} discover_hosts=${s.discover_hosts} exclude=[${exclLog}] exclude_nodes=[${enLog}]`);
 				return { saved: true, settings: s };
 			} catch (e) {
 				return { error: 'failed to save settings' };
@@ -310,9 +334,9 @@ const methods = {
 	},
 
 	scanStart: {
-		args: { hosts: 0, timeout: 0, mode: "", jobs: 0, discover: 0, discover_hosts: 2, exclude: [] },
+		args: { hosts: 0, timeout: 0, mode: "", jobs: 0, discover: 0, discover_hosts: 2, exclude: [], exclude_nodes: [] },
 		call: function(req) {
-			rpclog('scanStart', `hosts=${req.args?.hosts} timeout=${req.args?.timeout} mode=${req.args?.mode} jobs=${req.args?.jobs} discover=${req.args?.discover} discover_hosts=${req.args?.discover_hosts} exclude=[${join_list(valid_subnets(req.args?.exclude ?? []), ' ')}]`);
+			rpclog('scanStart', `hosts=${req.args?.hosts} timeout=${req.args?.timeout} mode=${req.args?.mode} jobs=${req.args?.jobs} discover=${req.args?.discover} discover_hosts=${req.args?.discover_hosts} exclude=[${join_list(valid_subnets(req.args?.exclude ?? []), ' ')}] exclude_nodes=[${join_list(valid_nodes(req.args?.exclude_nodes ?? []), ' ')}]`);
 			if (scan_running())
 				return { error: 'scan already running' };
 			if (speed_running())
@@ -332,6 +356,10 @@ const methods = {
 			// subnets are validated (digits+dots only), so double quotes are safe
 			// here even though the launch command is itself wrapped in '...'
 			const excludeArg = length(exclude) ? ` -x "${join_list(exclude, ' ')}"` : '';
+			// edge nodes to rank below preferred ones (e.g. DME under RU DPI).
+			// validated as [A-Z0-9]+ tokens, safe inside quotes.
+			const excludeNodes = valid_nodes(req.args?.exclude_nodes ?? []);
+			const excludeNodesArg = length(excludeNodes) ? ` -e "${join_list(excludeNodes, ' ')}"` : '';
 
 			// on a clean router there is no account yet; register one on the fly
 			if (!file_exists(ACCOUNT)) {
@@ -362,7 +390,7 @@ const methods = {
 			writefile('/tmp/wscan/percent', '0');
 
 			// launch in background, fully detached from rpcd so it survives the call
-			const cmd = `setsid sh -c 'sh ${BIN_DIR}/wscan.sh -n ${hosts} -t ${timeout} -j ${jobs}${full}${discover}${dhostsArg}${excludeArg} > /tmp/wscan.log 2>&1' < /dev/null > /dev/null 2>&1 &`;
+			const cmd = `setsid sh -c 'sh ${BIN_DIR}/wscan.sh -n ${hosts} -t ${timeout} -j ${jobs}${full}${discover}${dhostsArg}${excludeArg}${excludeNodesArg} > /tmp/wscan.log 2>&1' < /dev/null > /dev/null 2>&1 &`;
 			popen(cmd)?.read?.('all');
 			return { started: true };
 		}
