@@ -1055,6 +1055,11 @@ var view = this;
 				sort: true
 			});
 			exclSection.appendChild(exclWidget.render());
+			// DME checkbox sits BELOW the dropdown, with a clear gap: it is added
+			// here (after the dropdown) so the vertical order is stable - if it
+			// were appended to exclSection at build time, the async dropdown
+			// render would push it above, next to nothing.
+			exclSection.appendChild(exclNodeSection);
 			// any change re-persists settings
 			exclSection.addEventListener('cbi-dropdown-change', function() {
 				persistCurrent();
@@ -1062,12 +1067,12 @@ var view = this;
 		};
 
 		// exclude DME node: on RU provider networks DME (Moscow) is DPI-filtered,
-		// so endpoints landing on it are dropped from the result.
+		// so endpoints landing on it are dropped from the result. Appended inside
+		// buildExcl() after the dropdown so it always sits below it with a gap.
 		var exclNodeSection = E('div', { 'style': 'margin-top:18px; display:flex; align-items:center; gap:8px' });
 		var exclNodeInput = E('input', { 'type': 'checkbox', id: 'ws-excl-node', style: 'margin:0' });
 		exclNodeSection.appendChild(exclNodeInput);
 		exclNodeSection.appendChild(E('label', { 'for': 'ws-excl-node' }, 'Исключить узел DME (Москва)'));
-		exclSection.appendChild(exclNodeSection);
 
 		// restore persisted scan settings (hosts / timeout / jobs / discovery)
 		var persistCurrent = function() {
