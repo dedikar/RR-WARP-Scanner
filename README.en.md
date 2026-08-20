@@ -34,7 +34,7 @@ for RouteRich routers and the LuCI web interface.
 
 - **Two-phase scan** — quick handshake probing (`phase 1`), then an honest
   latency and tunnel check for the survivors (`phase 2`).
-- **Parallelism** — up to 70 workers (`wgscan0..N-1`), each with its own
+- **Parallelism** — up to 50 workers (`wgscan0..N-1`), each with its own
   tunnel, splitting the host list round-robin.
 - **Honest ping** — latency to an endpoint is measured by ICMP RTT to the
   host, not through the tunnel/curl.
@@ -45,11 +45,16 @@ for RouteRich routers and the LuCI web interface.
   quick runs on a few dozen hosts or a full sweep of every subnet.
 - **Subnet exclusion** — checkboxes to skip any of the 17 WARP pool subnets
   (e.g. ones that are known dead or unwanted).
+- **DME node exclusion** — “Exclude DME node (Moscow)” removes all endpoints
+  landing on the Moscow edge node (filtered by DPI inside RU).
 - **Smart port-discovery** (optional) — adapts to UDP filtering of the network.
 - **WARP account management** — register, re-register, delete right from the
   UI; the account lives in `/etc/rrws-account.json` and survives reboot.
 - **Monotonic progress bar**, scan date, persistent results
   (`/etc/rrws-last-result.txt`).
+- **Speed test** — `download/upload` via `wgspeed` (`172.16.7.200`,
+  obfuscated tunnel `setconf` + `table 102`/`rule prio 98`) over top-N
+  working endpoints (`speed.cloudflare.com` with `--resolve` real IP).
 - **Backup with standard tools** — the account, settings and last result
   (`/etc/rrws-account.json`, `/etc/rrws-settings.json`,
   `/etc/rrws-last-result.txt`) are included in OpenWrt's regular backup
@@ -75,7 +80,7 @@ repository is configured on the system.
 Build the package (see "Building") and install it:
 
 ```sh
-opkg install luci-app-rrws_0.2.1-r19_all.ipk
+opkg install luci-app-rrws_0.2.1-r39_all.ipk
 ```
 
 Or via LuCI: **System → Software → Upload Package**.
@@ -98,7 +103,7 @@ also available.
 
 - **Hosts** (whole pool: 4318) — how many endpoints to check.
 - **Timeout (sec)** (1–10) — handshake wait per port.
-- **Workers** (1–70) — parallel workers.
+- **Workers** (1–50) — parallel workers.
 - **Discovery Mode** + **Probe hosts** — see below.
 
 ### Buttons
@@ -233,9 +238,9 @@ Version scheme: `x.y.z-rN` (r1..r99 → then bump z, reset r1).
 ./build.sh
 
 # or an exact version
-./build.sh 0.2.1-r19
+./build.sh 0.2.1-r39
 
-# result: build/luci-app-rrws_0.2.1-r19_all.ipk
+# result: build/luci-app-rrws_0.2.1-r39_all.ipk
 ```
 
 `build.sh` runs on Ubuntu/Debian, no SDK needed — the package is
@@ -254,10 +259,11 @@ make package/luci-app-rrws/compile
 
 - Scanning does not bring up the tunnel on the router — it uses temporary
   `wgscan0..N-1` interfaces and removes them when done.
-- Obfuscation (`Jc/Jmin/Jmax/H1-4/I1`) is applied only in the generated
-  `.conf` files; it is not set on the scanning interface, because
-  kmod-amneziawg hangs on some kernels with `amneziawg set` and those
-  parameters.
+- Scan interfaces (`wgscan0..N-1`) are brought up obfuscated via
+  `amneziawg setconf` (full set `Jc/Jmin/Jmax+S1-S4+H1-H4+I1` with endpoint
+  baked in, interface recreated per endpoint — otherwise `kmod-amneziawg`
+  oopses). Without it DPI would tear the tunnel right after handshake.
+  Generated `.conf` files use the same parameters.
 - Script files must stay LF (not CRLF) — otherwise bash/ash on OpenWrt and
   WSL trip over the line endings.
 - The `applyBest` backend method writes the best endpoint into
