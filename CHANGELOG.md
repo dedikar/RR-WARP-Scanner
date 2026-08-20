@@ -2,6 +2,15 @@
 Сборка: `./build.sh` (автоинкремент через `version.txt`) или `./build.sh <версия>`.
 Собирается в `build/luci-app-rrws_<версия>_all.ipk`, бэкапы — в `backup_<timestamp>/`.
 
+## 0.2.1-r38
+- Откат warp-in-warp из RRWS: убраны секция UI, методы внутреннего аккаунта
+  (registerInner/innerAccountStatus/renewInnerAccount/deleteInnerAccount),
+  поле outer_endpoint и флаги -O/-K/-k в wscan.sh. Причина: warp-in-warp на
+  ядерном kmod меняет только узел, но НЕ страну выхода (всегда RU), в отличие
+  от userspace warpscout (DE). Полноценный warp-in-warp будет в новой версии
+  RRWS2 на Go. Пинг в спид-тесте (r37) сохранён. Откат вернул wscan.sh/
+  luci.rrws/scan.js к состоянию v0.2.1-r33.
+
 ## 0.2.1-r37
 - Фикс: `outer_endpoint` добавлен в декларацию args scanStart (без этого
   ubus падал с «Invalid argument» при передаче поля). Проверено: scanStart с

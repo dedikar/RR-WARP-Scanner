@@ -22,15 +22,12 @@ OUT="/tmp/wscan_result.txt"
 TUN_PING_C=5      # echo burst size inside the tunnel (for TUN PING / LOSS)
 TEAR_RUN=2        # trailing lost echoes >= this => endpoint marked "torn down"
 
-usage() { echo "usage: wscan.sh [-w iface] [-n N] [-t sec] [-j N] [-p ports] [-o file] [-f] [-D] [-P N] [-x 'subnet ...'] [-e 'NODE ...'] [-O 'outer_ep' [-K outer_acct] [-k inner_acct]]" >&2; exit 1; }
+usage() { echo "usage: wscan.sh [-w iface] [-n N] [-t sec] [-j N] [-p ports] [-o file] [-f] [-D] [-P N] [-x 'subnet ...'] [-e 'NODE ...']" >&2; exit 1; }
 FULL=0
 DISCOVER=0
 DISCOVER_HOSTS=2
 EXCLUDE=""
 EXCLUDE_NODES=""
-OUTER_EP=""          # warp-in-warp: outer endpoint (enables nesting)
-OUTER_ACCT=""        # account file for the OUTER tunnel (default: $ACCOUNT)
-INNER_ACCT=""        # account file for the INNER workers (default: $ACCOUNT)
 while [ $# -gt 0 ]; do
   case "$1" in
     -w) IF_WARP="$2"; shift 2;;
@@ -44,9 +41,6 @@ while [ $# -gt 0 ]; do
     -P) DISCOVER_HOSTS="$2"; shift 2;;
     -x) EXCLUDE="$2"; shift 2;;
     -e) EXCLUDE_NODES="$2"; shift 2;;
-    -O) OUTER_EP="$2"; shift 2;;
-    -K) OUTER_ACCT="$2"; shift 2;;
-    -k) INNER_ACCT="$2"; shift 2;;
     *) usage;;
   esac
 done
@@ -54,6 +48,7 @@ done
 [ "$DISCOVER_HOSTS" -gt 10 ] && DISCOVER_HOSTS=10
 [ "$JOBS" -ge 1 ] 2>/dev/null || JOBS=1
 [ "$JOBS" -gt 50 ] && JOBS=50
+
 # key source: prefer account file, fall back to uci interface
 if [ -s "$ACCOUNT" ]; then
   PRIV=$(jq -r '.private_key' "$ACCOUNT" 2>/dev/null)
@@ -64,30 +59,6 @@ else
 fi
 [ -n "$PRIV" ] || { echo "no key: run wregister.sh first or set -w iface"; exit 1; }
 [ -n "$PEER" ] || PEER="bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
-
-# keys actually used by the scan workers. In warp-in-warp the inner workers use
-# a SECOND account (INNER_ACCT, default the main one) routed through the outer
-# tunnel; the outer tunnel uses OUTER_ACCT (default main). In the plain scan
-# they're all the same.
-USE_PRIV="$PRIV"; USE_PEER="$PEER"
-IN_PRIV="$PRIV";  IN_PEER="$PEER"
-OUT_PRIV="$PRIV"; OUT_PEER="$PEER"
-if [ -n "$OUTER_EP" ]; then
-  INNER_ACCT="${INNER_ACCT:-$ACCOUNT}"
-  if [ -s "$INNER_ACCT" ]; then
-    IN_PRIV=$(jq -r '.private_key' "$INNER_ACCT" 2>/dev/null)
-    IN_PEER=$(jq -r '.peer_public_key' "$INNER_ACCT" 2>/dev/null)
-  fi
-  OUTER_ACCT="${OUTER_ACCT:-$ACCOUNT}"
-  if [ -s "$OUTER_ACCT" ]; then
-    OUT_PRIV=$(jq -r '.private_key' "$OUTER_ACCT" 2>/dev/null)
-    OUT_PEER=$(jq -r '.peer_public_key' "$OUTER_ACCT" 2>/dev/null)
-  fi
-  USE_PRIV="$IN_PRIV"; USE_PEER="$IN_PEER"
-  # warp-in-warp funnels every worker through ONE outer tunnel - Cloudflare
-  # rate-limits that, so few workers (like warpscout's -jt 1)
-  [ "$JOBS" -gt 3 ] && JOBS=3
-fi
 
 IPBASE="172.16.7"
 LOG="/tmp/wscan.log"
@@ -123,7 +94,7 @@ start_wg_ep() {
   ip addr add $IPLOCAL/32 dev $IF 2>/dev/null
   cat > /tmp/wscan.conf <<EOF
 [Interface]
-PrivateKey=$USE_PRIV
+PrivateKey=$PRIV
 Jc=$WSC_JC
 Jmin=$WSC_JMIN
 Jmax=$WSC_JMAX
@@ -138,7 +109,7 @@ H4=4
 I1=$WSC_I1
 
 [Peer]
-PublicKey=$USE_PEER
+PublicKey=$PEER
 AllowedIPs=0.0.0.0/0
 Endpoint=$ep
 PersistentKeepalive=5
@@ -160,81 +131,6 @@ teardown_wg() {
   ip link del $IF 2>/dev/null
 }
 
-# --- warp-in-warp: a single OUTER tunnel every worker routes through --------
-# The outer tunnel is an obfuscated WARP tunnel (OUT_PRIV/OUT_PEER) to one
-# outer endpoint. Workers then bring up their own tunnels with a SECOND account
-# (IN_PRIV/IN_PEER) and get a `ip rule from <worker-ip> lookup OUTER_TBL`, so
-# their UDP packets travel INSIDE the outer tunnel - the exit (node) of every
-# inner endpoint is the outer tunnel's node. Tables: outer = 199; workers use
-# the outer table instead of 200+w so they all nest inside it.
-OUTER_TBL=199
-OUTER_IF="wgouter"
-OUTER_IP="172.16.7.200"
-
-outer_up() {
-  local i hs
-  for i in 1 2 3; do ip link del $OUTER_IF 2>/dev/null && break; sleep 1; done
-  modprobe amneziawg 2>/dev/null
-  if ! ip link add dev $OUTER_IF type amneziawg 2>/dev/null; then
-    log "outer: cannot create interface"
-    return 1
-  fi
-  ip link set $OUTER_IF mtu 1280
-  ip link set $OUTER_IF up
-  ip addr add $OUTER_IP/32 dev $OUTER_IF 2>/dev/null
-  cat > /tmp/wscan_outer.conf <<EOF
-[Interface]
-PrivateKey=$OUT_PRIV
-Jc=$WSC_JC
-Jmin=$WSC_JMIN
-Jmax=$WSC_JMAX
-S1=0
-S2=0
-S3=0
-S4=0
-H1=1
-H2=2
-H3=3
-H4=4
-I1=$WSC_I1
-
-[Peer]
-PublicKey=$OUT_PEER
-AllowedIPs=0.0.0.0/0
-Endpoint=$OUTER_EP
-PersistentKeepalive=5
-EOF
-  amneziawg setconf $OUTER_IF /tmp/wscan_outer.conf 2>/dev/null
-  local rc=$?
-  rm -f /tmp/wscan_outer.conf
-  if [ "$rc" -ne 0 ]; then
-    log "outer: setconf failed rc=$rc"
-    ip link del $OUTER_IF 2>/dev/null
-    return 1
-  fi
-  # fresh handshake before we route workers through it
-  for i in $(seq 1 10); do
-    hs=$(amneziawg show $OUTER_IF latest-handshakes 2>/dev/null | awk -v p="$OUT_PEER" '$1==p{print $2;exit}')
-    now=$(date +%s)
-    if [ -n "$hs" ] && [ $((now-hs)) -lt 3 ]; then
-      ip route add default dev $OUTER_IF table $OUTER_TBL 2>/dev/null
-      ip rule add from $OUTER_IP/32 lookup $OUTER_TBL prio 98 2>/dev/null
-      log "outer: up via $OUTER_EP (hs age $((now-hs))s)"
-      return 0
-    fi
-    sleep 1
-  done
-  log "outer: no handshake via $OUTER_EP"
-  ip link del $OUTER_IF 2>/dev/null
-  return 1
-}
-
-outer_down() {
-  ip rule del from $OUTER_IP/32 lookup $OUTER_TBL prio 98 2>/dev/null
-  ip route del default dev $OUTER_IF table $OUTER_TBL 2>/dev/null
-  ip link del $OUTER_IF 2>/dev/null
-}
-
 # bring up an obfuscated interface to $ep and wait for a fresh handshake.
 # Usage: try_endpoint IF IPLOCAL TABLE ep n last -> 0/1
 try_endpoint() {
@@ -242,7 +138,7 @@ try_endpoint() {
   local i hs now
   start_wg_ep "$IF" "$IPLOCAL" "$TBL" "$ep" || return 1
   for i in $(seq 1 "$n"); do
-    hs=$(amneziawg show $IF latest-handshakes 2>/dev/null | awk -v p="$USE_PEER" '$1==p{print $2;exit}')
+    hs=$(amneziawg show $IF latest-handshakes 2>/dev/null | awk -v p="$PEER" '$1==p{print $2;exit}')
     now=$(date +%s)
     if [ -n "$hs" ] && [ "$hs" -gt "$last" ] && [ $((now-hs)) -lt 3 ]; then
       return 0
@@ -410,11 +306,7 @@ trace_meta() {
 # re-created per endpoint, because a live obfuscated interface must not be
 # mutated and non-obfuscated ones are torn by DPI (no data, no real node).
 worker() {
-  local w="$1" IF="wgscan$w" IPLOCAL="$IPBASE.$((2+w))"
-  # in warp-in-warp every worker routes through the outer tunnel (OUTER_TBL),
-  # so all its packets travel inside the outer WARP; otherwise own table 200+w
-  local TBL=$OUTER_TBL
-  [ -z "$OUTER_EP" ] && TBL=$((200+w))
+  local w="$1" IF="wgscan$w" IPLOCAL="$IPBASE.$((2+w))" TBL=$((200+w))
   local hostfile="/tmp/wscan/hosts.$w.txt" alivefile="/tmp/wscan/alive.$w.txt"
   local ip ep port hs now last rtt ok meta colo loc count
   last=0
@@ -536,17 +428,6 @@ TOTAL=$(wc -l < /tmp/wscan/hosts.txt)
 echo "phase1" > $PROGRESS
 log "start: $TOTAL hosts, jobs=$JOBS, sweep=$HS_SWEEP s, ports=$PORTS, full=$FULL${EXCLUDE:+ excl=$EXCLUDE}"
 
-# warp-in-warp: bring up the single OUTER tunnel first; all workers route
-# through it. If it can't come up, fall back to a plain (non-nested) scan.
-if [ -n "$OUTER_EP" ]; then
-  if outer_up; then
-    log "outer: warp-in-warp active (outer=$OUTER_EP, inner jobs=$JOBS)"
-  else
-    log "outer: FAILED - falling back to plain scan"
-    OUTER_EP=""
-  fi
-fi
-
 # launch workers (only those that actually got hosts: with jobs > hosts the
 # round-robin split leaves the trailing workers with no file at all)
 w=0
@@ -557,9 +438,6 @@ while [ $w -lt $JOBS ]; do
   w=$((w+1))
 done
 wait
-
-# tear down the outer tunnel after all workers finished
-[ "$OUTER_EP" != "" ] && outer_down
 
 # collect survivors + sort by ping (torn-down endpoints sink to the bottom,
 # matching warpScout: they are shown, but never picked as best). Endpoints on

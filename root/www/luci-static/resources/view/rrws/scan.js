@@ -82,23 +82,6 @@ var callRenewAccount = rrwsDeclare({
 	method: 'renewAccount'
 });
 
-var callInnerStatus = rrwsDeclare({
-	object: 'luci.rrws',
-	method: 'innerAccountStatus'
-});
-var callRegisterInner = rrwsDeclare({
-	object: 'luci.rrws',
-	method: 'registerInner'
-});
-var callRenewInner = rrwsDeclare({
-	object: 'luci.rrws',
-	method: 'renewInnerAccount'
-});
-var callDeleteInner = rrwsDeclare({
-	object: 'luci.rrws',
-	method: 'deleteInnerAccount'
-});
-
 var callRegisterLog = rrwsDeclare({
 	object: 'luci.rrws',
 	method: 'registerLog'
@@ -117,7 +100,7 @@ var callAppVersion = rrwsDeclare({
 var callScanStart = rrwsDeclare({
 	object: 'luci.rrws',
 	method: 'scanStart',
-	params: [ 'hosts', 'timeout', 'mode', 'jobs', 'discover', 'discover_hosts', 'exclude', 'exclude_nodes', 'outer_endpoint' ]
+	params: [ 'hosts', 'timeout', 'mode', 'jobs', 'discover', 'discover_hosts', 'exclude', 'exclude_nodes' ]
 });
 
 var callScanStatus = rrwsDeclare({
@@ -179,7 +162,7 @@ var callGetSettings = rrwsDeclare({
 var callSaveSettings = rrwsDeclare({
 	object: 'luci.rrws',
 	method: 'saveSettings',
-	params: [ 'hosts', 'timeout', 'jobs', 'discover', 'discover_hosts', 'exclude', 'exclude_nodes', 'outer_endpoint' ]});
+	params: [ 'hosts', 'timeout', 'jobs', 'discover', 'discover_hosts', 'exclude', 'exclude_nodes' ]});
 
 var uiStore = function(key, val) {
 	try { window.localStorage.setItem('rrws.' + key, val ? '1' : '0'); }
@@ -939,8 +922,7 @@ var view = this;
 			var dhosts = parseInt(discHostsInput.value, 10) || 2;
 			var exclude = getExclude();
 			var excludeNodes = getExcludeNodes();
-			var outerEndpoint = getOuterEndpoint();
-			callSaveSettings(hosts, timeout, jobs, discover, dhosts, exclude, excludeNodes, outerEndpoint);
+			callSaveSettings(hosts, timeout, jobs, discover, dhosts, exclude, excludeNodes);
 			resultEl.innerHTML = '';
 			statusLine(statusEl, 'Запуск...');
 			progressBar.style.width = '0%';
@@ -951,7 +933,7 @@ var view = this;
 			stopBtn.disabled = false;
 			stopBtn.textContent = 'Остановить';
 			startLogAutoRefresh();
-			callScanStart(hosts, timeout, mode, jobs, discover, dhosts, exclude, excludeNodes, outerEndpoint).then(function(res) {
+			callScanStart(hosts, timeout, mode, jobs, discover, dhosts, exclude, excludeNodes).then(function(res) {
 				console.log('[rrws] scanStart:', JSON.stringify(res));
 				if (res.error) {
 					statusLine(statusEl, 'Ошибка: ' + res.error, true);
@@ -1092,33 +1074,6 @@ var view = this;
 		exclNodeSection.appendChild(exclNodeInput);
 		exclNodeSection.appendChild(E('label', { 'for': 'ws-excl-node' }, 'Исключить узел DME (Москва)'));
 
-		// warp-in-warp: scan from inside one OUTER tunnel. Requires a separate
-		// inner account and a non-DME outer endpoint (else nesting is pointless).
-		var wiwSection = E('div', { 'class': 'cbi-section', 'style': 'margin-top:14px; border:1px solid #a33; border-radius:4px; padding:10px 12px' });
-		wiwSection.appendChild(E('h3', {}, 'Warp-in-warp (скан через внешний туннель)'));
-		wiwSection.appendChild(E('p', { 'class': 'text-muted', 'style': 'margin:2px 0 8px 0' },
-			'Сканирует все эндпоинты ИЗНУТРИ одного внешнего туннеля — они выходят через узел внешнего эндпоинта. ' +
-			'ВАЖНО: нужен не-DME внешний эндпоинт (иначе вложение бесполезно — DME внутри DME). ' +
-			'Страна выхода всё равно RU (определяется аккаунтом), меняется только узел (обход DPI).'));
-		var wiwOuterInput = E('input', { 'type': 'text', id: 'ws-wiw-outer', placeholder: 'Например: 188.114.96.191:4500', style: 'width:220px' });
-		wiwSection.appendChild(E('label', { 'for': 'ws-wiw-outer' }, ' Внешний эндпоинт (не-DME): '));
-		wiwSection.appendChild(wiwOuterInput);
-		wiwSection.appendChild(E('div', { 'style': 'margin-top:10px' },
-			E('button', { 'class': 'btn cbi-button cbi-button-action', 'type': 'button', id: 'ws-wiw-register' }, 'Внутренний аккаунт (зарегистрировать)')));
-		wiwSection.appendChild(E('p', { 'class': 'text-muted', 'style': 'margin:6px 0 0 0', id: 'ws-wiw-status' }, '...'));
-		scanSection.appendChild(wiwSection);
-
-		var getOuterEndpoint = function() {
-			return (wiwOuterInput.value || '').trim();
-		};
-		wiwOuterInput.addEventListener('change', persistCurrent);
-		var wiwRegBtn = document.getElementById('ws-wiw-register');
-		if (wiwRegBtn) wiwRegBtn.addEventListener('click', function() {
-			if (!window.confirm('Зарегистрировать отдельный внутренний аккаунт для warp-in-warp?')) return;
-			callRegisterInner().then(function(r) { refreshWiwStatus(); })
-				.catch(function(e) { console.error('[rrws] registerInner err', e.message); });
-		});
-
 		// restore persisted scan settings (hosts / timeout / jobs / discovery)
 		var persistCurrent = function() {
 			var h = parseInt(hostsInput.value, 10) || 40;
@@ -1126,7 +1081,7 @@ var view = this;
 			var j = parseInt(jobsInput.value, 10) || 3;
 			var d = discInput.checked ? 1 : 0;
 			var dh = parseInt(discHostsInput.value, 10) || 2;
-			callSaveSettings(h, t, j, d, dh, getExclude(), getExcludeNodes(), getOuterEndpoint());
+			callSaveSettings(h, t, j, d, dh, getExclude(), getExcludeNodes());
 		};
 		hostsInput.addEventListener('change', persistCurrent);
 		timeoutInput.addEventListener('change', persistCurrent);
@@ -1153,24 +1108,9 @@ var view = this;
 				exclWidget.setValue(s.exclude);
 			if (s.exclude_nodes && s.exclude_nodes.indexOf('DME') >= 0)
 				exclNodeInput.checked = true;
-			if (s.outer_endpoint)
-				wiwOuterInput.value = s.outer_endpoint;
 		}).catch(function(e) {
 			console.error('[rrws] getSettings err', e.message);
 		});
-
-		// inner account status for warp-in-warp
-		var wiwStatusEl = document.getElementById('ws-wiw-status');
-		var refreshWiwStatus = function() {
-			callInnerStatus().then(function(st) {
-				if (!wiwStatusEl) return;
-				if (st && st.registered)
-					wiwStatusEl.textContent = 'Внутренний аккаунт: зарегистрирован (id ' + String(st.id).slice(0,8) + '...)';
-				else
-					wiwStatusEl.textContent = 'Внутренний аккаунт: не зарегистрирован. Нужен для warp-in-warp.';
-			}).catch(function(e) { console.error('[rrws] inner status err', e.message); });
-		};
-		refreshWiwStatus();
 
 		scanSection.appendChild(statusEl);
 		scanSection.appendChild(progressEl);
@@ -1277,7 +1217,7 @@ var view = this;
 				var nm = (it.node || '') + (it.country ? ' ' + it.country : '');
 				if (nm)
 					row.appendChild(E('span', { 'class': 'text-muted', 'style': 'margin-right:8px' }, nm));
-				var sd = (it.rtt && it.rtt != '?' ? it.rtt + ' мс  ' : '') + '▼ ' + fmtSpeed(it.dl) + '  ▲ ' + fmtSpeed(it.ul);
+				var sd = '▼ ' + fmtSpeed(it.dl) + '  ▲ ' + fmtSpeed(it.ul);
 				row.appendChild(E('span', { 'class': 'text-muted' }, sd));
 				var btnGroup = E('div', { 'style': 'display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-left:auto; flex:0 0 auto' });
 				var btn = E('button', { 'class': 'btn cbi-button cbi-button-apply', 'type': 'button' }, 'Скопировать .conf');

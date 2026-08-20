@@ -123,6 +123,14 @@ LuCI-приложение **RRWS (RouteRich WARP Scanner)** для OpenWrt-ро�
   (исключает build/, backup*, *.ipk), .gitattributes (LF для sh/ucode/js).
 
 ## Текущее состояние (2026-08-11)
+- Установлена 0.2.1-r38: warp-in-warp ОТКАЧЕН из RRWS (секция UI, методы
+  внутреннего аккаунта, -O/-K/-k удалены; файлы к r33). Причина: на ядерном
+  kmod warp-in-warp меняет только узел, НЕ страну выхода (всегда RU), в
+  отличие от userspace warpscout (DE/FRA) — тот же аккаунт/эндпоинт/конфиг
+  даёт DE в userspace и RU в kernel. Полноценный warp-in-warp → новая версия
+  RRWS2 на Go/userspace (amneziawg-go + netstack, как warpscout). Пинг в
+  спид-тесте сохранён (r37). ВАЖНО: выход WARP на ядре всегда RU; userspace
+  даёт узел-выход.
 - Установлена 0.2.1-r37: warp-in-warp насквозь в UI/бэкенде — секция в UI
   (предупреждение про не-DME, поле внешнего эндпоинта, кнопка регистрации
   внутреннего аккаунта), scanStart передаёт -O/-K/-k. Проверено: внешний
