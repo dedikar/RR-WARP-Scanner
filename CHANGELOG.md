@@ -2,6 +2,29 @@
 Сборка: `./build.sh` (автоинкремент через `version.txt`) или `./build.sh <версия>`.
 Собирается в `build/luci-app-rrws_<версия>_all.ipk`, бэкапы — в `backup_<timestamp>/`.
 
+## 0.2.1-r37
+- Фикс: `outer_endpoint` добавлен в декларацию args scanStart (без этого
+  ubus падал с «Invalid argument» при передаче поля). Проверено: scanStart с
+  outer_endpoint поднимает внешний туннель и все эндпоинты выходят через его
+  узел (напр. внешний 188.114.96.191:4500 → все FRA).
+
+## 0.2.1-r36
+- Warp-in-warp в UI/бэкенде: секция «Warp-in-warp (скан через внешний
+  туннель)» с предупреждением про не-DME эндпоинт, полем внешнего эндпоинта
+  (сохраняется в settings, `outer_endpoint`), кнопкой регистрации внутреннего
+  аккаунта (идентична первому, `registerInner`/`innerAccountStatus`/
+  `renewInnerAccount`/`deleteInnerAccount`, файл
+  `/etc/rrws-inner-account.json`). scanStart передаёт `-O/-K/-k`; без
+  внутреннего аккаунта возвращает ошибку. Спид-тест: добавлен пинг (ICMP RTT)
+  к каждому эндпоинту в выводе и UI.
+
+## 0.2.1-r35
+- Бэкенд: методы внутреннего аккаунта для warp-in-warp —
+  `innerAccountStatus` / `registerInner` / `renewInnerAccount` /
+  `deleteInnerAccount`. Внутренний аккаунт хранится отдельно
+  (`/etc/rrws-inner-account.json`), регистрация идентична первому
+  (тот же wregister.sh, просто `-o` на другой файл).
+
 ## 0.2.1-r34
 - Warp-in-warp в сканере (скрипт): wscan.sh поддержал флаги `-O <outer_ep>`
   (включить вложение), `-K <outer_acct>` (аккаунт внешнего туннеля),

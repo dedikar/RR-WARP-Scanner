@@ -45,6 +45,13 @@ resolve_speed_ip() {
   return 0
 }
 
+# ICMP RTT to the endpoint host (independent of tunnel/TLS)
+host_rtt() {
+  local ip="$1" ms
+  ms=$(ping -c 3 -W 2 -q "$ip" 2>/dev/null | sed -n 's/.*round-trip.*= \([0-9.]*\)\/.*/\1/p' | head -1)
+  [ -n "$ms" ] && echo "$ms"
+}
+
 log() { echo "[$(date +%H:%M:%S)] $*" >> "$LOG"; }
 
 usage() { echo "usage: wsspeed.sh [-n N] [-t sec] [-o file]" >&2; exit 1; }
@@ -180,14 +187,17 @@ while read ep node loc; do
   i=$((i+1))
   echo "$i/$TOTAL $ep ($node $loc)" > "$PROGRESS"
   log "test $i/$TOTAL: $ep ($node $loc)"
+  ip=${ep%:*}
+  rtt=$(host_rtt "$ip")
+  [ -n "$rtt" ] || rtt="?"
   if ! start_if "$ep"; then
     log "cannot create interface, skipping $ep"
-    echo "$ep $node $loc 0 0" >> "$OUT"
+    echo "$ep $node $loc $rtt 0 0" >> "$OUT"
     continue
   fi
   if ! wait_hs; then
     log "no handshake for $ep, skipping"
-    echo "$ep $node $loc 0 0" >> "$OUT"
+    echo "$ep $node $loc $rtt 0 0" >> "$OUT"
     teardown
     continue
   fi
@@ -207,8 +217,8 @@ while read ep node loc; do
   # bytes/sec -> kbit/s
   dlk=$(awk -v b="$dl" 'BEGIN{printf "%.0f", b*8/1000}')
   ulk=$(awk -v b="$ul" 'BEGIN{printf "%.0f", b*8/1000}')
-  log "result $ep ($node $loc) dl=${dlk} kbit/s ul=${ulk} kbit/s"
-  echo "$ep $node $loc $dlk $ulk" >> "$OUT"
+  log "result $ep ($node $loc) ping=${rtt}ms dl=${dlk} kbit/s ul=${ulk} kbit/s"
+  echo "$ep $node $loc $rtt $dlk $ulk" >> "$OUT"
   teardown
 done < /tmp/wsspeed.list
 

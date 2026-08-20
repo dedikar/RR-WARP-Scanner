@@ -7,6 +7,7 @@ import { popen, readfile, writefile, stat } from 'fs';
 
 const BIN_DIR = '/usr/bin';
 const ACCOUNT = '/etc/rrws-account.json';
+const INNER_ACCOUNT = '/etc/rrws-inner-account.json';
 const RESULT = '/tmp/wscan_result.txt';
 const RESULT_SAVED = '/etc/rrws-last-result.txt';
 const ALIVE = '/tmp/wscan/alive.txt';
@@ -114,6 +115,19 @@ function account_status() {
 	const peer = jq_field(ACCOUNT, 'peer_public_key');
 	const addr = jq_field(ACCOUNT, 'address');
 	const priv = jq_field(ACCOUNT, 'private_key');
+	if (!id)
+		return { registered: false };
+	return { registered: true, id, peer_public_key: peer, address: addr, private_key: priv };
+}
+
+// inner account for warp-in-warp (stored separately; same shape as main)
+function inner_account_status() {
+	if (!file_exists(INNER_ACCOUNT))
+		return { registered: false };
+	const id = jq_field(INNER_ACCOUNT, 'id');
+	const peer = jq_field(INNER_ACCOUNT, 'peer_public_key');
+	const addr = jq_field(INNER_ACCOUNT, 'address');
+	const priv = jq_field(INNER_ACCOUNT, 'private_key');
 	if (!id)
 		return { registered: false };
 	return { registered: true, id, peer_public_key: peer, address: addr, private_key: priv };
@@ -268,6 +282,54 @@ const methods = {
 		}
 	},
 
+	innerAccountStatus: {
+		call: function() {
+			rpclog('innerAccountStatus');
+			const s = inner_account_status();
+			s.registering = register_running();
+			return s;
+		}
+	},
+
+	registerInner: {
+		call: function() {
+			// identical to register, but writes to the INNER account file
+			rpclog('registerInner');
+			if (scan_running() || speed_running())
+				return { error: 'scan or speed test is running - stop it first' };
+			if (register_running())
+				return { error: 'registration already in progress' };
+			command(`setsid sh -c 'sh ${BIN_DIR}/wregister.sh -o ${INNER_ACCOUNT} > ${REG_LOG} 2>&1' < /dev/null > /dev/null 2>&1 &`);
+			writefile(REG_MARK, '1');
+			return { started: true };
+		}
+	},
+
+	renewInnerAccount: {
+		call: function() {
+			rpclog('renewInnerAccount');
+			if (scan_running() || speed_running())
+				return { error: 'scan or speed test is running - stop it first' };
+			if (register_running())
+				return { error: 'registration already in progress' };
+			command(`setsid sh -c 'sh ${BIN_DIR}/wregister.sh -o ${INNER_ACCOUNT} > ${REG_LOG} 2>&1' < /dev/null > /dev/null 2>&1 &`);
+			writefile(REG_MARK, '1');
+			return { started: true };
+		}
+	},
+
+	deleteInnerAccount: {
+		call: function() {
+			rpclog('deleteInnerAccount');
+			if (scan_running() || speed_running())
+				return { error: 'scan or speed test is running - stop it first' };
+			if (register_running())
+				return { error: 'registration in progress - try again' };
+			command('rm -f ' + shellquote(INNER_ACCOUNT));
+			return { deleted: !file_exists(INNER_ACCOUNT), account: inner_account_status() };
+		}
+	},
+
 	renewAccount: {
 		call: function() {
 			// wregister.sh writes via a .tmp file + mv, so the old account is
@@ -299,7 +361,7 @@ const methods = {
 	},
 
 	saveSettings: {
-		args: { hosts: 0, timeout: 0, jobs: 0, discover: 0, discover_hosts: 0, exclude: [], exclude_nodes: [] },
+		args: { hosts: 0, timeout: 0, jobs: 0, discover: 0, discover_hosts: 0, exclude: [], exclude_nodes: [], outer_endpoint: "" },
 		call: function(req) {
 			const s = {
 				hosts: max(1, min(int(req.args?.hosts ?? 40), HOSTS_MAX)),
@@ -308,7 +370,8 @@ const methods = {
 				discover: int(req.args?.discover) == 1 ? 1 : 0,
 				discover_hosts: max(1, min(int(req.args?.discover_hosts ?? 2), 10)),
 				exclude: valid_subnets(req.args?.exclude ?? []),
-				exclude_nodes: valid_nodes(req.args?.exclude_nodes ?? [])
+				exclude_nodes: valid_nodes(req.args?.exclude_nodes ?? []),
+				outer_endpoint: trim(req.args?.outer_endpoint ?? '')
 			};
 			let exclJson = '';
 			for (let i = 0; i < length(s.exclude); i++)
@@ -322,10 +385,11 @@ const methods = {
 			let enLog = '';
 			for (let i = 0; i < length(s.exclude_nodes); i++)
 				enLog += (i ? ' ' : '') + s.exclude_nodes[i];
-			const body = `{"hosts":${s.hosts},"timeout":${s.timeout},"jobs":${s.jobs},"discover":${s.discover},"discover_hosts":${s.discover_hosts},"exclude":[${exclJson}],"exclude_nodes":[${enJson}]}`;
+			const oe = s.outer_endpoint ? `,"outer_endpoint":"${s.outer_endpoint}"` : '';
+			const body = `{"hosts":${s.hosts},"timeout":${s.timeout},"jobs":${s.jobs},"discover":${s.discover},"discover_hosts":${s.discover_hosts},"exclude":[${exclJson}],"exclude_nodes":[${enJson}]${oe}}`;
 			try {
 				writefile(SETTINGS, body);
-				rpclog('saveSettings', `hosts=${s.hosts} timeout=${s.timeout} jobs=${s.jobs} discover=${s.discover} discover_hosts=${s.discover_hosts} exclude=[${exclLog}] exclude_nodes=[${enLog}]`);
+				rpclog('saveSettings', `hosts=${s.hosts} timeout=${s.timeout} jobs=${s.jobs} discover=${s.discover} discover_hosts=${s.discover_hosts} exclude=[${exclLog}] exclude_nodes=[${enLog}] outer=${s.outer_endpoint}`);
 				return { saved: true, settings: s };
 			} catch (e) {
 				return { error: 'failed to save settings' };
@@ -334,7 +398,7 @@ const methods = {
 	},
 
 	scanStart: {
-		args: { hosts: 0, timeout: 0, mode: "", jobs: 0, discover: 0, discover_hosts: 2, exclude: [], exclude_nodes: [] },
+		args: { hosts: 0, timeout: 0, mode: "", jobs: 0, discover: 0, discover_hosts: 2, exclude: [], exclude_nodes: [], outer_endpoint: "" },
 		call: function(req) {
 			rpclog('scanStart', `hosts=${req.args?.hosts} timeout=${req.args?.timeout} mode=${req.args?.mode} jobs=${req.args?.jobs} discover=${req.args?.discover} discover_hosts=${req.args?.discover_hosts} exclude=[${join_list(valid_subnets(req.args?.exclude ?? []), ' ')}] exclude_nodes=[${join_list(valid_nodes(req.args?.exclude_nodes ?? []), ' ')}]`);
 			if (scan_running())
@@ -360,6 +424,16 @@ const methods = {
 			// validated as [A-Z0-9]+ tokens, safe inside quotes.
 			const excludeNodes = valid_nodes(req.args?.exclude_nodes ?? []);
 			const excludeNodesArg = length(excludeNodes) ? ` -e "${join_list(excludeNodes, ' ')}"` : '';
+			// warp-in-warp: if an outer endpoint is given, scan from inside one
+			// outer tunnel (needs the separate inner account). Values are the
+			// files/endpoint we control, safe inside the quoted launch command.
+			const outerEp = trim(req.args?.outer_endpoint ?? '');
+			let outerArg = '';
+			if (outerEp) {
+				if (!file_exists(INNER_ACCOUNT))
+					return { error: 'no inner account - register it first (warp-in-warp)' };
+				outerArg = ` -O "${outerEp}" -K ${ACCOUNT} -k ${INNER_ACCOUNT}`;
+			}
 
 			// on a clean router there is no account yet; register one on the fly
 			if (!file_exists(ACCOUNT)) {
@@ -390,7 +464,7 @@ const methods = {
 			writefile('/tmp/wscan/percent', '0');
 
 			// launch in background, fully detached from rpcd so it survives the call
-			const cmd = `setsid sh -c 'sh ${BIN_DIR}/wscan.sh -n ${hosts} -t ${timeout} -j ${jobs}${full}${discover}${dhostsArg}${excludeArg}${excludeNodesArg} > /tmp/wscan.log 2>&1' < /dev/null > /dev/null 2>&1 &`;
+			const cmd = `setsid sh -c 'sh ${BIN_DIR}/wscan.sh -n ${hosts} -t ${timeout} -j ${jobs}${full}${discover}${dhostsArg}${excludeArg}${excludeNodesArg}${outerArg} > /tmp/wscan.log 2>&1' < /dev/null > /dev/null 2>&1 &`;
 			popen(cmd)?.read?.('all');
 			return { started: true };
 		}
@@ -627,10 +701,10 @@ const methods = {
 			const lines = split(rtrim(raw, '\n'), '\n');
 			const items = [];
 			for (let i = 0; i < length(lines); i++) {
-				// ep node loc dl_kbps ul_kbps
-				const m = match(lines[i], /^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)$/);
+				// ep node loc rtt dl_kbps ul_kbps
+				const m = match(lines[i], /^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)$/);
 				if (m)
-					push(items, { endpoint: m[1], node: m[2], country: m[3], dl: int(m[4]), ul: int(m[5]) });
+					push(items, { endpoint: m[1], node: m[2], country: m[3], rtt: m[4], dl: int(m[5]), ul: int(m[6]) });
 			}
 			return { results: items };
 		}
