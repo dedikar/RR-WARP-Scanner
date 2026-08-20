@@ -627,10 +627,10 @@ const methods = {
 			const lines = split(rtrim(raw, '\n'), '\n');
 			const items = [];
 			for (let i = 0; i < length(lines); i++) {
-				// ep node loc dl_kbps ul_kbps
-				const m = match(lines[i], /^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)$/);
+				// ep node loc rtt dl_kbps ul_kbps
+				const m = match(lines[i], /^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)$/);
 				if (m)
-					push(items, { endpoint: m[1], node: m[2], country: m[3], dl: int(m[4]), ul: int(m[5]) });
+					push(items, { endpoint: m[1], node: m[2], country: m[3], rtt: m[4], dl: int(m[5]), ul: int(m[6]) });
 			}
 			return { results: items };
 		}

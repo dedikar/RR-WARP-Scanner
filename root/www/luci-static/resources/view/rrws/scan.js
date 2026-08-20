@@ -1217,7 +1217,7 @@ var view = this;
 				var nm = (it.node || '') + (it.country ? ' ' + it.country : '');
 				if (nm)
 					row.appendChild(E('span', { 'class': 'text-muted', 'style': 'margin-right:8px' }, nm));
-				var sd = '▼ ' + fmtSpeed(it.dl) + '  ▲ ' + fmtSpeed(it.ul);
+				var sd = (it.rtt && it.rtt != '?' ? it.rtt + ' мс  ' : '') + '▼ ' + fmtSpeed(it.dl) + '  ▲ ' + fmtSpeed(it.ul);
 				row.appendChild(E('span', { 'class': 'text-muted' }, sd));
 				var btnGroup = E('div', { 'style': 'display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-left:auto; flex:0 0 auto' });
 				var btn = E('button', { 'class': 'btn cbi-button cbi-button-apply', 'type': 'button' }, 'Скопировать .conf');

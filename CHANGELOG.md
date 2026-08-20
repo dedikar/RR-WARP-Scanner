@@ -2,6 +2,12 @@
 Сборка: `./build.sh` (автоинкремент через `version.txt`) или `./build.sh <версия>`.
 Собирается в `build/luci-app-rrws_<версия>_all.ipk`, бэкапы — в `backup_<timestamp>/`.
 
+## 0.2.1-r39
+- Фикс спид-теста «Результатов нет»: после отката warp-in-warp (r38) парсер
+  speedResult в ucode вернулся к 5-полю, а wsspeed.sh пишет 6 (с пингом) —
+  строки не распарсились. speedResult снова парсит `ep node loc rtt dl ul`,
+  UI показывает пинг.
+
 ## 0.2.1-r38
 - Откат warp-in-warp из RRWS: убраны секция UI, методы внутреннего аккаунта
   (registerInner/innerAccountStatus/renewInnerAccount/deleteInnerAccount),
