@@ -15,3 +15,6 @@ Thumbs.db
 
 # Temp backups kept alongside source
 scan.js.backup_*
+
+# RRWS2 (second version, separate repo)
+rrws2/
