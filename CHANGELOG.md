@@ -2,6 +2,12 @@
 Сборка: `./build.sh` (автоинкремент через `version.txt`) или `./build.sh <версия>`.
 Собирается в `build/luci-app-rrws_<версия>_all.ipk`, бэкапы — в `backup_<timestamp>/`.
 
+## 0.2.1-r40
+- Дефолты параметров скана приведены к рабочим значениям: Хостов 40→500,
+  Потоков 3→50, Пробных хостов (Discovery) 2→5 (Таймаут уже был 3с).
+  Обновлены scan.js (value + fallback `||`), luci.rrws (дефолты saveSettings/
+  scanStart) и wscan.sh (HOSTS_MAX=500, DISCOVER_HOSTS=5).
+
 ## 0.2.1-r39
 - Фикс спид-теста «Результатов нет»: после отката warp-in-warp (r38) парсер
   speedResult в ucode вернулся к 5-полю, а wsspeed.sh пишет 6 (с пингом) —

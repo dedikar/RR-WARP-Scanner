@@ -302,11 +302,11 @@ const methods = {
 		args: { hosts: 0, timeout: 0, jobs: 0, discover: 0, discover_hosts: 0, exclude: [], exclude_nodes: [] },
 		call: function(req) {
 			const s = {
-				hosts: max(1, min(int(req.args?.hosts ?? 40), HOSTS_MAX)),
+				hosts: max(1, min(int(req.args?.hosts ?? 500), HOSTS_MAX)),
 				timeout: max(1, min(int(req.args?.timeout ?? 3), 10)),
-				jobs: max(1, min(int(req.args?.jobs ?? 3), JOBS_MAX)),
+				jobs: max(1, min(int(req.args?.jobs ?? 50), JOBS_MAX)),
 				discover: int(req.args?.discover) == 1 ? 1 : 0,
-				discover_hosts: max(1, min(int(req.args?.discover_hosts ?? 2), 10)),
+				discover_hosts: max(1, min(int(req.args?.discover_hosts ?? 5), 10)),
 				exclude: valid_subnets(req.args?.exclude ?? []),
 				exclude_nodes: valid_nodes(req.args?.exclude_nodes ?? [])
 			};
@@ -334,7 +334,7 @@ const methods = {
 	},
 
 	scanStart: {
-		args: { hosts: 0, timeout: 0, mode: "", jobs: 0, discover: 0, discover_hosts: 2, exclude: [], exclude_nodes: [] },
+		args: { hosts: 0, timeout: 0, mode: "", jobs: 0, discover: 0, discover_hosts: 5, exclude: [], exclude_nodes: [] },
 		call: function(req) {
 			rpclog('scanStart', `hosts=${req.args?.hosts} timeout=${req.args?.timeout} mode=${req.args?.mode} jobs=${req.args?.jobs} discover=${req.args?.discover} discover_hosts=${req.args?.discover_hosts} exclude=[${join_list(valid_subnets(req.args?.exclude ?? []), ' ')}] exclude_nodes=[${join_list(valid_nodes(req.args?.exclude_nodes ?? []), ' ')}]`);
 			if (scan_running())
@@ -342,14 +342,14 @@ const methods = {
 			if (speed_running())
 				return { error: 'speed test is running - wait for it to finish' };
 
-			const hosts = max(1, min(int(req.args?.hosts ?? 60), HOSTS_MAX));
-			const timeout = max(1, min(int(req.args?.timeout ?? 4), 10));
-			const jobs = max(1, min(int(req.args?.jobs ?? 3), JOBS_MAX));
+			const hosts = max(1, min(int(req.args?.hosts ?? 500), HOSTS_MAX));
+			const timeout = max(1, min(int(req.args?.timeout ?? 3), 10));
+			const jobs = max(1, min(int(req.args?.jobs ?? 50), JOBS_MAX));
 			// "full" sweeps every octet of each subnet; anything else is the fast mode
 			const full = (req.args?.mode == 'full') ? ' -f' : '';
 			// optional smart port discovery (fast-path on 2408, fallback sweep)
 			const discover = (int(req.args?.discover) == 1) ? ' -D' : '';
-			const dhosts = max(1, min(int(req.args?.discover_hosts ?? 2), 10));
+			const dhosts = max(1, min(int(req.args?.discover_hosts ?? 5), 10));
 			const dhostsArg = discover ? ` -P ${dhosts}` : '';
 			// subnets to skip, passed to the host list generator (-x)
 			const exclude = valid_subnets(req.args?.exclude ?? []);

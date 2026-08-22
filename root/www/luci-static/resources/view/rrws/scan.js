@@ -791,7 +791,7 @@ var view = this;
 
 		var hostsInput = E('input', {
 			'class': 'cbi-input-text', 'type': 'number', id: 'ws-hosts',
-			value: '40', min: '1', max: '4318', style: 'width: 70px'
+			value: '500', min: '1', max: '4318', style: 'width: 70px'
 		});
 		clampInput(hostsInput, 1, 4318);
 		scanSection.appendChild(E('label', { 'for': 'ws-hosts' }, 'Хостов (весь пул: 4318): '));
@@ -809,7 +809,7 @@ var view = this;
 
 		var jobsInput = E('input', {
 			'class': 'cbi-input-text', 'type': 'number', id: 'ws-jobs',
-			value: '3', min: '1', max: '50', style: 'width: 70px'
+			value: '50', min: '1', max: '50', style: 'width: 70px'
 		});
 		clampInput(jobsInput, 1, 50);
 		scanSection.appendChild(E('label', { 'for': 'ws-jobs' }, ' Потоков (1-50): '));
@@ -915,11 +915,11 @@ var view = this;
 
 		var startScan = function(mode) {
 			console.log('[rrws] scan click', mode);
-			var hosts = parseInt(hostsInput.value, 10) || 40;
+			var hosts = parseInt(hostsInput.value, 10) || 500;
 			var timeout = parseInt(timeoutInput.value, 10) || 3;
-			var jobs = parseInt(jobsInput.value, 10) || 3;
+			var jobs = parseInt(jobsInput.value, 10) || 50;
 			var discover = discInput.checked ? 1 : 0;
-			var dhosts = parseInt(discHostsInput.value, 10) || 2;
+			var dhosts = parseInt(discHostsInput.value, 10) || 5;
 			var exclude = getExclude();
 			var excludeNodes = getExcludeNodes();
 			callSaveSettings(hosts, timeout, jobs, discover, dhosts, exclude, excludeNodes);
@@ -1016,7 +1016,7 @@ var view = this;
 
 		var discHostsInput = E('input', {
 			'class': 'cbi-input-text', 'type': 'number', id: 'ws-disc-hosts',
-			value: '2', min: '1', max: '10', style: 'width: 50px'
+			value: '5', min: '1', max: '10', style: 'width: 50px'
 		});
 		clampInput(discHostsInput, 1, 10);
 		discRow.appendChild(E('label', { 'for': 'ws-disc-hosts' }, 'Пробных хостов (1-10):'));
@@ -1076,11 +1076,11 @@ var view = this;
 
 		// restore persisted scan settings (hosts / timeout / jobs / discovery)
 		var persistCurrent = function() {
-			var h = parseInt(hostsInput.value, 10) || 40;
+			var h = parseInt(hostsInput.value, 10) || 500;
 			var t = parseInt(timeoutInput.value, 10) || 3;
-			var j = parseInt(jobsInput.value, 10) || 3;
+			var j = parseInt(jobsInput.value, 10) || 50;
 			var d = discInput.checked ? 1 : 0;
-			var dh = parseInt(discHostsInput.value, 10) || 2;
+			var dh = parseInt(discHostsInput.value, 10) || 5;
 			callSaveSettings(h, t, j, d, dh, getExclude(), getExcludeNodes());
 		};
 		hostsInput.addEventListener('change', persistCurrent);
