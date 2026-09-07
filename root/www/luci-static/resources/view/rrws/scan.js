@@ -100,7 +100,7 @@ var callAppVersion = rrwsDeclare({
 var callScanStart = rrwsDeclare({
 	object: 'luci.rrws',
 	method: 'scanStart',
-	params: [ 'hosts', 'timeout', 'mode', 'jobs', 'discover', 'discover_hosts', 'exclude', 'exclude_nodes' ]
+	params: [ 'hosts', 'timeout', 'mode', 'jobs', 'discover', 'discover_hosts', 'exclude', 'exclude_nodes', 'drop_bad' ]
 });
 
 var callScanStatus = rrwsDeclare({
@@ -162,7 +162,7 @@ var callGetSettings = rrwsDeclare({
 var callSaveSettings = rrwsDeclare({
 	object: 'luci.rrws',
 	method: 'saveSettings',
-	params: [ 'hosts', 'timeout', 'jobs', 'discover', 'discover_hosts', 'exclude', 'exclude_nodes' ]});
+	params: [ 'hosts', 'timeout', 'jobs', 'discover', 'discover_hosts', 'exclude', 'exclude_nodes', 'drop_bad' ]});
 
 var uiStore = function(key, val) {
 	try { window.localStorage.setItem('rrws.' + key, val ? '1' : '0'); }
@@ -922,7 +922,8 @@ var view = this;
 			var dhosts = parseInt(discHostsInput.value, 10) || 5;
 			var exclude = getExclude();
 			var excludeNodes = getExcludeNodes();
-			callSaveSettings(hosts, timeout, jobs, discover, dhosts, exclude, excludeNodes);
+			var dropBad = dropBadInput.checked ? 1 : 0;
+			callSaveSettings(hosts, timeout, jobs, discover, dhosts, exclude, excludeNodes, dropBad);
 			resultEl.innerHTML = '';
 			statusLine(statusEl, 'Запуск...');
 			progressBar.style.width = '0%';
@@ -933,7 +934,7 @@ var view = this;
 			stopBtn.disabled = false;
 			stopBtn.textContent = 'Остановить';
 			startLogAutoRefresh();
-			callScanStart(hosts, timeout, mode, jobs, discover, dhosts, exclude, excludeNodes).then(function(res) {
+			callScanStart(hosts, timeout, mode, jobs, discover, dhosts, exclude, excludeNodes, dropBad).then(function(res) {
 				console.log('[rrws] scanStart:', JSON.stringify(res));
 				if (res.error) {
 					statusLine(statusEl, 'Ошибка: ' + res.error, true);
@@ -1024,6 +1025,16 @@ var view = this;
 		discSection.appendChild(discRow);
 		scanSection.appendChild(discSection);
 
+		// drop dead/lossy endpoints from the scan result entirely ("отбрасывать
+		// мёртвые/с потерями"): torn tunnels (DPI-cut after handshake) or any
+		// with packet loss > 0 are excluded from the final table and .conf/txt
+		// exports, not just ranked below working ones.
+		var dropBadRow = E('div', { 'style': 'margin-top:10px; display:flex; align-items:center; gap:8px' });
+		var dropBadInput = E('input', { 'type': 'checkbox', id: 'ws-drop-bad', style: 'margin:0' });
+		dropBadRow.appendChild(dropBadInput);
+		dropBadRow.appendChild(E('label', { 'for': 'ws-drop-bad' }, 'Отбрасывать мёртвые и с потерями'));
+		scanSection.appendChild(dropBadRow);
+
 		// excluded subnets: native LuCI ui.Dropdown (multi-select, like zeroblock).
 		// The pool list comes from the backend (getSettings.subnets) and is added
 		// as choices when it arrives.
@@ -1081,7 +1092,7 @@ var view = this;
 			var j = parseInt(jobsInput.value, 10) || 50;
 			var d = discInput.checked ? 1 : 0;
 			var dh = parseInt(discHostsInput.value, 10) || 5;
-			callSaveSettings(h, t, j, d, dh, getExclude(), getExcludeNodes());
+			callSaveSettings(h, t, j, d, dh, getExclude(), getExcludeNodes(), dropBadInput.checked ? 1 : 0);
 		};
 		hostsInput.addEventListener('change', persistCurrent);
 		timeoutInput.addEventListener('change', persistCurrent);
@@ -1089,6 +1100,7 @@ var view = this;
 		discInput.addEventListener('change', persistCurrent);
 		discHostsInput.addEventListener('change', persistCurrent);
 		exclNodeInput.addEventListener('change', persistCurrent);
+		dropBadInput.addEventListener('change', persistCurrent);
 
 		var getExcludeNodes = function() {
 			return exclNodeInput.checked ? [ 'DME' ] : [];
@@ -1108,6 +1120,8 @@ var view = this;
 				exclWidget.setValue(s.exclude);
 			if (s.exclude_nodes && s.exclude_nodes.indexOf('DME') >= 0)
 				exclNodeInput.checked = true;
+			if (s.drop_bad)
+				dropBadInput.checked = !!s.drop_bad;
 		}).catch(function(e) {
 			console.error('[rrws] getSettings err', e.message);
 		});

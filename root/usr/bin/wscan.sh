@@ -22,12 +22,13 @@ OUT="/tmp/wscan_result.txt"
 TUN_PING_C=5      # echo burst size inside the tunnel (for TUN PING / LOSS)
 TEAR_RUN=2        # trailing lost echoes >= this => endpoint marked "torn down"
 
-usage() { echo "usage: wscan.sh [-w iface] [-n N] [-t sec] [-j N] [-p ports] [-o file] [-f] [-D] [-P N] [-x 'subnet ...'] [-e 'NODE ...']" >&2; exit 1; }
+usage() { echo "usage: wscan.sh [-w iface] [-n N] [-t sec] [-j N] [-p ports] [-o file] [-f] [-D] [-P N] [-x 'subnet ...'] [-e 'NODE ...'] [-a]" >&2; exit 1; }
 FULL=0
 DISCOVER=0
 DISCOVER_HOSTS=5
 EXCLUDE=""
 EXCLUDE_NODES=""
+DROP_BAD=0
 while [ $# -gt 0 ]; do
   case "$1" in
     -w) IF_WARP="$2"; shift 2;;
@@ -41,6 +42,7 @@ while [ $# -gt 0 ]; do
     -P) DISCOVER_HOSTS="$2"; shift 2;;
     -x) EXCLUDE="$2"; shift 2;;
     -e) EXCLUDE_NODES="$2"; shift 2;;
+    -a) DROP_BAD=1; shift 1;;
     *) usage;;
   esac
 done
@@ -447,7 +449,15 @@ cat /tmp/wscan/alive.*.txt 2>/dev/null > /tmp/wscan/alive.txt
 ALIVE=$(wc -l < /tmp/wscan/alive.txt)
 if [ -s "$OUT" ]; then
   # field order: ep colo loc rtt tun_rtt tun_loss torn (1 = torn down)
-  if [ -n "$EXCLUDE_NODES" ]; then
+  # -a (drop bad): also drop rows where the tunnel is torn (torn==1) or has
+  #   any packet loss (tun_loss>0) entirely - like node exclusion, applied
+  #   globally so dead/lossy endpoints never reach the table or .conf exports.
+  if [ "$DROP_BAD" = "1" ]; then
+    # keep row only if torn field !=1 AND loss field ==0/-
+    awk -v d=1 '
+      ($7 != "1") && ($6 == "0") { key=($7=="1"?"1":"0")" "$4" "; print key $0 }' "$OUT" \
+      | sort -n | sed 's/^[01] [0-9.]* //' > /tmp/wscan_result_sorted.txt
+  elif [ -n "$EXCLUDE_NODES" ]; then
     # drop excluded-node rows (awk $2 = node); keep torn even if on an excluded
     # node is pointless - torn is dropped by applyBest anyway, so filter by node
     # first, then sort the survivors
@@ -457,7 +467,9 @@ if [ -s "$OUT" ]; then
         for (i in arr) if (arr[i] == n) return 1;
         return 0;
       }
-      !in_excl($2) { key=($7=="1"?"1":"0")" "$4" "; print key $0 }' "$OUT" \
+      key=($7=="1"?"1":"0")" "$4" ";
+      # apply node exclusion, then let torn sink below working rows
+      !in_excl($2) { print key $0 }' "$OUT" \
       | sort -n | sed 's/^[01] [0-9.]* //' > /tmp/wscan_result_sorted.txt
   else
     awk '{key=($7=="1"?"1":"0")" "$4" "; print key $0}' "$OUT" \
