@@ -1025,14 +1025,13 @@ var view = this;
 		discSection.appendChild(discRow);
 		scanSection.appendChild(discSection);
 
-		// drop dead/lossy endpoints from the scan result entirely ("отбрасывать
-		// мёртвые/с потерями"): torn tunnels (DPI-cut after handshake) or any
-		// with packet loss > 0 are excluded from the final table and .conf/txt
-		// exports, not just ranked below working ones.
+		// show only stable endpoints in the result ("отображать только
+		// стабильные"): torn tunnels (DPI-cut after handshake) or any with
+		// packet loss are excluded instead of just ranked below working ones.
 		var dropBadRow = E('div', { 'style': 'margin-top:10px; display:flex; align-items:center; gap:8px' });
 		var dropBadInput = E('input', { 'type': 'checkbox', id: 'ws-drop-bad', style: 'margin:0' });
 		dropBadRow.appendChild(dropBadInput);
-		dropBadRow.appendChild(E('label', { 'for': 'ws-drop-bad' }, 'Отбрасывать мёртвые и с потерями'));
+		dropBadRow.appendChild(E('label', { 'for': 'ws-drop-bad' }, 'Отображать только стабильные'));
 		scanSection.appendChild(dropBadRow);
 
 		// excluded subnets: native LuCI ui.Dropdown (multi-select, like zeroblock).
