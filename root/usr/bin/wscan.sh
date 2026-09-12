@@ -449,32 +449,30 @@ cat /tmp/wscan/alive.*.txt 2>/dev/null > /tmp/wscan/alive.txt
 ALIVE=$(wc -l < /tmp/wscan/alive.txt)
 if [ -s "$OUT" ]; then
   # field order: ep colo loc rtt tun_rtt tun_loss torn (1 = torn down)
-  # -a (drop bad): also drop rows where the tunnel is torn (torn==1) or has
-  #   any packet loss (tun_loss>0) entirely - like node exclusion, applied
-  #   globally so dead/lossy endpoints never reach the table or .conf exports.
-  if [ "$DROP_BAD" = "1" ]; then
-    # keep row only if torn field !=1 AND loss field ==0/-
-    awk -v d=1 '
-      ($7 != "1") && ($6 == "0") { key=($7=="1"?"1":"0")" "$4" "; print key $0 }' "$OUT" \
-      | sort -n | sed 's/^[01] [0-9.]* //' > /tmp/wscan_result_sorted.txt
-  elif [ -n "$EXCLUDE_NODES" ]; then
-    # drop excluded-node rows (awk $2 = node); keep torn even if on an excluded
-    # node is pointless - torn is dropped by applyBest anyway, so filter by node
-    # first, then sort the survivors
-    awk -v en="$EXCLUDE_NODES" '
-      function in_excl(n,  arr, i) {
-        split(en, arr, " ");
-        for (i in arr) if (arr[i] == n) return 1;
-        return 0;
-      }
-      key=($7=="1"?"1":"0")" "$4" ";
-      # apply node exclusion, then let torn sink below working rows
-      !in_excl($2) { print key $0 }' "$OUT" \
-      | sort -n | sed 's/^[01] [0-9.]* //' > /tmp/wscan_result_sorted.txt
-  else
-    awk '{key=($7=="1"?"1":"0")" "$4" "; print key $0}' "$OUT" \
-      | sort -n | sed 's/^[01] [0-9.]* //' > /tmp/wscan_result_sorted.txt
-  fi
+  #
+  # Filtering + ordering in ONE awk pass:
+  #   - node exclusion (-e, e.g. DME): drop rows whose colo ($2) is excluded
+  #   - drop-bad (-a): drop rows that are torn ($7==1) or have loss ($6!=0)
+  # The sort key is a SINGLE integer (torn => +9000000, plus rtt*100) so plain
+  # `sort -n` orders by rtt ascending with torn rows last. A two-field key
+  # ("0 12.3") does NOT work: busybox `sort -n` compares only the leading "0",
+  # so rtt was never actually ordered. busybox `sort -k` is also a no-op here.
+  # The "key=" assignment MUST be inside the action block: as a bare top-level
+  # statement busybox awk prints every record verbatim (excluded node survives
+  # as a raw duplicate) - that was the "DME filter does nothing" bug.
+  awk -v d="$DROP_BAD" -v en="$EXCLUDE_NODES" '
+    function in_excl(n,  arr, i) {
+      split(en, arr, " ");
+      for (i in arr) if (arr[i] == n) return 1;
+      return 0;
+    }
+    {
+      if (length(en) && in_excl($2)) next;
+      if (d == "1" && ($7 == "1" || $6 != "0")) next;
+      k = ($7 == "1" ? 9000000 : 0) + int($4 * 100 + 0.5);
+      printf "%d %s\n", k, $0;
+    }' "$OUT" \
+    | sort -n | sed 's/^[0-9]* //' > /tmp/wscan_result_sorted.txt
   mv /tmp/wscan_result_sorted.txt "$OUT"
 fi
 echo "done" > $PROGRESS
