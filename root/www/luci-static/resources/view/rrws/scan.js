@@ -220,10 +220,11 @@ function makeConf(base, endpoint) {
 function copyToClipboard(text, btn) {
 	// after a successful copy the button turns read-only ("Скопировано") so the
 	// user can't fire it again and sees at a glance that the copy is done
+	var orig = btn.textContent;
 	var restore = function() {
 		window.setTimeout(function() {
 			btn.disabled = false;
-			btn.textContent = 'Скопировать .conf';
+			btn.textContent = orig;
 		}, 2000);
 	};
 	// modern API first
@@ -241,6 +242,7 @@ function copyToClipboard(text, btn) {
 }
 
 function legacyCopy(text, btn) {
+	var orig = btn.textContent;
 	var ta = E('textarea', { 'style': 'position:fixed;left:-9999px;top:0' });
 	ta.value = text;
 	document.body.appendChild(ta);
@@ -255,7 +257,7 @@ function legacyCopy(text, btn) {
 	document.body.removeChild(ta);
 	window.setTimeout(function() {
 		btn.disabled = false;
-		btn.textContent = 'Скопировать .conf';
+		btn.textContent = orig;
 	}, 2000);
 }
 
@@ -574,12 +576,21 @@ var view = this;
 				accStatusLabel.className = 'label success';
 				accStatusLabel.style.background = '';
 				accStatusLabel.style.color = '';
-				var s = E('span', {}, 'ID: ');
-				s.appendChild(E('code', {}, account.id || '?'));
-				s.appendChild(document.createTextNode('  Address: '));
-				s.appendChild(E('code', {}, account.address || '?'));
-				accDetail.appendChild(s);
-				accHint.textContent = 'Peer-ключ и адрес у всех аккаунтов WARP одинаковы; меняются id и private_key.';
+var s = E('span', {}, 'ID: ');
+			s.appendChild(E('code', {}, account.id || '?'));
+			s.appendChild(document.createTextNode('  Address: '));
+			s.appendChild(E('code', {}, account.address || '?'));
+			accDetail.appendChild(s);
+			var k = E('div', { 'style': 'display:flex; align-items:center; gap:8px; margin-top:4px; flex-wrap:wrap' });
+			k.appendChild(E('span', {}, 'PrivateKey: '));
+			k.appendChild(E('code', { 'style': 'word-break:break-all' }, account.private_key || '?'));
+			if (account.private_key) {
+				var kb = E('button', { 'class': 'btn cbi-button', 'type': 'button', 'style': 'padding:1px 8px;font-size:11px;flex-shrink:0' }, 'Скопировать ключ');
+				kb.addEventListener('click', function() { copyToClipboard(account.private_key, kb); });
+				k.appendChild(kb);
+			}
+			accDetail.appendChild(k);
+			accHint.textContent = 'Peer-ключ и адрес у всех аккаунтов WARP одинаковы; меняются id и private_key.';
 			} else {
 				accStatusLabel.textContent = 'Не зарегистрирован';
 				accStatusLabel.className = 'label';
