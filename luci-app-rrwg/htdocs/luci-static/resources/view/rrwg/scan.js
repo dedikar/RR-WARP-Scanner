@@ -1064,28 +1064,19 @@ return view.extend({
 		var det = E('details');
 		det.appendChild(E('summary', { style: 'cursor:pointer' }, 'Логи'));
 
-		// Two sources, two panes. They used to be concatenated into one <pre>:
-		// the engine log is append-only while the rpcd log is separately
-		// rewritten, so a single pane made the top part jump around under a
-		// bottom part that never moved. Side by side, each one only grows.
-		var mkPane = function(title, hint) {
-			var wrap = E('div', { style: 'flex:1 1 48%;min-width:280px' });
-			wrap.appendChild(E('div', { style: 'color:#888;font-size:11px;margin-bottom:4px' },
-				title + (hint ? ' — ' + hint : '')));
-			var pre = E('pre', {
-				style: 'height:260px;overflow:auto;font-size:11px;white-space:pre-wrap;' +
-					'background:#111;padding:8px;margin:0;border:1px solid #333;border-radius:3px'
-			}, '...');
-			wrap.appendChild(pre);
-			return { node: wrap, pre: pre };
-		};
-
-		var panes = E('div', { style: 'display:flex;gap:10px;flex-wrap:wrap;margin-top:8px' });
-		var enginePane = mkPane('Движок', 'ход скана и замера скорости');
-		var rpcPane = mkPane('rpcd', 'что и с какими параметрами запускал бэкенд');
-		panes.appendChild(enginePane.node);
-		panes.appendChild(rpcPane.node);
-		det.appendChild(panes);
+		// One merged log, in chronological order, like a chat: the backend
+		// interleaves engine and rpcd lines by their timestamps, so the page
+		// renders a single stream. Two side-by-side panes were hard to follow -
+		// the reader had to match up what happened when across two scrollbars.
+		// Each line is tagged with its source instead, which costs three
+		// characters and keeps the order intact.
+		var logWrap = E('div', { style: 'margin-top:8px' });
+		var pre = E('pre', {
+			style: 'height:320px;overflow:auto;font-size:11px;white-space:pre-wrap;' +
+				'background:#111;padding:8px;margin:0;border:1px solid #333;border-radius:3px'
+		}, '...');
+		logWrap.appendChild(pre);
+		det.appendChild(logWrap);
 
 		var controls = E('div', { style: 'margin-top:8px;display:flex;align-items:center;gap:14px;flex-wrap:wrap' });
 
@@ -1113,37 +1104,38 @@ return view.extend({
 		var clearBtn = E('button', { 'class': 'btn cbi-button', style: 'margin-left:auto' }, 'Очистить');
 		clearBtn.addEventListener('click', function() {
 			callScanLogClear().then(function() {
-				enginePane.pre.textContent = '';
-				rpcPane.pre.textContent = '';
-				self.logSeen = { engine: '', rpc: '' };
+				pre.textContent = '';
+				self.logSeen = '';
 			});
 		});
 		controls.appendChild(clearBtn);
 		det.appendChild(controls);
 
 		sec.appendChild(det);
-		this.logPanes = { engine: enginePane.pre, rpc: rpcPane.pre };
+		this.logPane = pre;
 		this.logAutoRefreshChk = autoRefreshChk;
 		this.logAutoScrollChk = autoScrollChk;
-		this.logSeen = { engine: '', rpc: '' };
+		this.logSeen = '';
 		return sec;
 	},
 
-	// Append only what is new to a pane, so the scroll position survives polling.
-	appendLog: function(el, prev, text) {
-		if (text === prev) return prev;
-		var added;
-		if (prev && text.indexOf(prev) === 0) {
-			added = text.slice(prev.length);
-		} else {
-			el.textContent = text;
-			added = null;
-		}
-		if (added) el.textContent += added;
-		if (this.logAutoScrollChk && this.logAutoScrollChk.checked) {
+	// The merged log is rebuilt server-side in timestamp order, so a line can
+	// appear between two existing ones - the stream is not append-only any more
+	// and diffing the tail would show it out of order. Replacing the text is
+	// therefore the simple correct thing, and the scroll position is preserved
+	// by restoring it around the swap.
+	updateLog: function(el, text) {
+		if (text === this.logSeen) return;
+		this.logSeen = text;
+		var atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+		var keep = el.scrollTop;
+		el.textContent = text;
+		if (this.logAutoScrollChk && this.logAutoScrollChk.checked && atBottom) {
 			el.scrollTop = el.scrollHeight;
+		} else {
+			// Not following: keep the reader where they were.
+			el.scrollTop = keep;
 		}
-		return text;
 	},
 
 	startLogAutoRefresh: function() {
@@ -1154,11 +1146,8 @@ return view.extend({
 			if (document.visibilityState === 'visible' &&
 			    self.logAutoRefreshChk && self.logAutoRefreshChk.checked) {
 				callScanLog().then(function(l) {
-					if (!l || !self.logPanes) return;
-					self.logSeen.engine = self.appendLog(
-						self.logPanes.engine, self.logSeen.engine, l.rrwg || '');
-					self.logSeen.rpc = self.appendLog(
-						self.logPanes.rpc, self.logSeen.rpc, l.rpc || '');
+					if (!l || !self.logPane) return;
+					self.updateLog(self.logPane, l.merged || '');
 				});
 			}
 			window.setTimeout(tick, 3000);

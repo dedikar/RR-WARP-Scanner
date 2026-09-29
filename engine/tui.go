@@ -53,7 +53,10 @@ type emitter func(tea.Msg)
 
 var (
 	plainNodes sync.Map
-	plainOut   io.Writer = os.Stderr
+	// Assigned in main() AFTER any replacement of os.Stderr: a value captured at
+	// package init would keep pointing at the original descriptor and lose the
+	// timestamps added for the merged log.
+	plainOut   io.Writer
 	plainTotal atomic.Int64
 	plainStep  atomic.Int64
 	plainDone  atomic.Int64

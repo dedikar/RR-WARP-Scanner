@@ -795,13 +795,66 @@ function scan_result() {
 	};
 }
 
-function scan_log() {
-	const wscan = read_file(LOG) ?? '';
-	const rpc = read_file(RPC_LOG) ?? '';
-	return {
-		rrwg: length(wscan) > 40000 ? substr(wscan, length(wscan) - 40000) : wscan,
-		rpc: length(rpc) > 8000 ? substr(rpc, length(rpc) - 8000) : rpc,
+// Both logs carry the same "YYYY-MM-DD HH:MM:SS" prefix: the engine writes it
+// when its stderr is redirected (engine/timestamps.go), and the backend adds it
+// in stamp(). They are merged into one chronological stream so the page shows a
+// single log instead of two panes that are hard to read side by side.
+//
+// Lines without a timestamp - a stray panic, or output from an older engine -
+// keep their place instead of being dropped.
+function merge_logs(engineText, rpcText) {
+	const rows = [];
+
+	// The engine already prefixes its own lines with the "engine" tag (see
+	// engine/timestamps.go). Strip it here so the merged line carries the tag
+	// once instead of showing "engine  engine  ...".
+	const stripOwnTag = function(text, tag) {
+		const t = trim(text);
+		return substr(t, 0, length(tag)) == tag ? trim(substr(t, length(tag))) : t;
 	};
+
+	const collect = function(text, tag) {
+		const src = split(text ?? '', '\n');
+		for (let i = 0; i < length(src); i++) {
+			const raw = rtrim(src[i], '\r');
+			if (!length(trim(raw))) continue;
+			const m = match(raw, /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*(.*)$/);
+			if (m)
+				push(rows, { ts: m[1], tag: tag, text: stripOwnTag(m[2], tag) });
+			else
+				push(rows, { ts: '', tag: tag, text: stripOwnTag(raw, tag) });
+		}
+	};
+
+	collect(engineText, 'engine');
+	collect(rpcText, 'rpcd');
+
+	// Insertion sort by timestamp; untimed entries stay where they are. ucode on
+	// this build has no global sort(), and the streams are a few hundred lines.
+	for (let i = 1; i < length(rows); i++) {
+		const cur = rows[i];
+		if (!length(cur.ts)) continue;
+		let j = i - 1;
+		while (j >= 0 && length(rows[j].ts) && rows[j].ts > cur.ts) {
+			rows[j + 1] = rows[j];
+			j--;
+		}
+		rows[j + 1] = cur;
+	}
+
+	const MAX = 500;
+	const from = length(rows) > MAX ? length(rows) - MAX : 0;
+	let out = '';
+	for (let i = from; i < length(rows); i++)
+		out += (length(rows[i].ts) ? rows[i].ts + '  ' : '') +
+			rows[i].tag + '  ' + rows[i].text + '\n';
+	return out;
+}
+
+function scan_log() {
+	const engine = read_file(LOG) ?? '';
+	const rpc = read_file(RPC_LOG) ?? '';
+	return { merged: merge_logs(engine, rpc) };
 }
 
 function scan_log_clear() {

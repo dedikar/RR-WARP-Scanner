@@ -130,6 +130,20 @@ func main() {
 	}
 	stripLoaderArg()
 	enableVirtualTerminal()
+
+	// When stderr is not a terminal the output is being captured - the LuCI
+	// backend redirects it into /tmp/rrwg-state/scan.log. Timestamping it lets
+	// the page merge this log with its own in chronological order. On a real
+	// terminal the TUI draws the screen itself, so timestamps there would only
+	// corrupt the layout.
+	if !isTerminal(os.Stderr) {
+		flush := enableTimestamps()
+		defer flush()
+	}
+
+	// Pick up the (possibly replaced) stderr for the non-TUI output path too.
+	plainOut = os.Stderr
+
 	errPal = palette{enabled: colorEnabled(os.Stderr)}
 
 	if len(os.Args) < 2 {
