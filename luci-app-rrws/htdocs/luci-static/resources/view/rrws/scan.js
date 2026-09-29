@@ -363,7 +363,10 @@ function makeConf(endpoint) {
 	l.push('Endpoint = ' + endpoint);
 	l.push('AllowedIPs = ' + (confData.allowed_ips || '0.0.0.0/0'));
 	l.push('PersistentKeepalive = ' + (confData.keepalive || '25'));
-	return l.join('\n') + '\n';
+	// No trailing newline. It is harmless in a file, but this string is also
+	// pasted into a textarea (zeroblock's interface field), where a dangling
+	// blank line reads as a stray character and some paste paths keep it.
+	return l.join('\n');
 }
 
 // Telegram badge: "5/5" is a full pass, "3/5" a partial (some accounts cannot
