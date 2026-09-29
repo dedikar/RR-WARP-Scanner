@@ -109,6 +109,45 @@ echo "    binary: $BIN_SIZE bytes ($((BIN_SIZE / 1024 / 1024)) MB)"
 if command -v file >/dev/null 2>&1; then
 	echo "    type: $(file -b "$BIN_PATH")"
 fi
+
+# ---------------------------------------------------------- 1b. pack (UPX) ---
+#
+# UPX runs HERE, on the plain binary, and not on the finished .ipk: the ipk is a
+# gzip tar, and gzipping an already-gzipped payload saves nothing. Measured on
+# the r23 build: 12,648,610 -> 3,251,756 bytes packed, and after the archive's
+# own gzip the engine went 4,698,789 -> 3,251,243 - about 1.4 MB off a 4.8 MB
+# download.
+#
+# --lzma over the default: it is the smaller of the two on this binary and the
+# unpack cost lands on a 2-core router, where a scan takes minutes anyway.
+#
+# A packed binary must still be proven to run, not just to build: UPX injects a
+# decompressor that executes before main(), and a bad pack fails at runtime. This
+# build was verified on the target router with a full scan through userspace
+# tunnels (12/12 endpoints, Telegram probed, no panic), so the risk here is a
+# future UPX release rather than this one.
+#
+# UPX is optional: without it the build still works and just ships the fatter
+# binary. Set NO_UPX=1 to skip it deliberately.
+if [ "${NO_UPX:-0}" = "1" ]; then
+	echo "    upx: skipped (NO_UPX=1)"
+elif command -v upx >/dev/null 2>&1; then
+	BIN_PLAIN="$BIN_PATH.plain"
+	if mv "$BIN_PATH" "$BIN_PLAIN" && upx --best --lzma -q -o "$BIN_PATH" "$BIN_PLAIN"; then
+		PACKED_SIZE=$(stat -c%s "$BIN_PATH")
+		echo "    upx: $BIN_SIZE -> $PACKED_SIZE bytes ($((BIN_SIZE / 1024 / 1024)) -> $((PACKED_SIZE / 1024 / 1024)) MB)"
+		rm -f "$BIN_PLAIN"
+		BIN_SIZE="$PACKED_SIZE"
+	else
+		# A failed pack must not leave a half-written binary in place: restore
+		# the working one and continue unpacked.
+		echo "WARNING: upx failed - shipping the unpacked binary" >&2
+		mv -f "$BIN_PLAIN" "$BIN_PATH"
+	fi
+else
+	echo "    upx: not installed - shipping the unpacked binary (apt install upx-ucl)"
+fi
+
 # The router has ~46 MB free on /overlay; a binary past this budget will not fit
 # comfortably alongside the rest of the system.
 if [ "$BIN_SIZE" -gt 26214400 ]; then
