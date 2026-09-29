@@ -163,15 +163,19 @@ function injectPageCss() {
 		// plain text and read as an empty area.
 		'.rrwg-disclosure > summary {',
 		'  cursor: pointer;',
-		'  padding: 6px 10px;',
+		'  padding: 6px 14px;',
 		'  font-weight: 600;',
 		'  border: 1px solid rgba(255, 255, 255, .85);',
 		'  border-radius: 6px;',
 		'  background: var(--background-color-low, transparent);',
 		'  list-style: none;',
-		'  display: flex;',
+		// inline-flex, not flex: a block-level summary stretches to the full
+		// width of the panel, so the button looked like a bar rather than a
+		// button. inline-flex sizes it to its own label and triangle.
+		'  display: inline-flex;',
 		'  align-items: center;',
 		'  gap: 8px;',
+		'  user-select: none;',
 		'}',
 		'.rrwg-disclosure > summary::-webkit-details-marker { display: none; }',
 		// Triangle drawn from a border so it does not depend on a font glyph
