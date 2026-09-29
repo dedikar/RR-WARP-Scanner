@@ -1,0 +1,13 @@
+{
+	"admin/services/rrwg": {
+		"title": "RR WARP Scanner NG",
+		"order": 82,
+		"action": {
+			"type": "view",
+			"path": "rrwg/scan"
+		},
+		"depends": {
+			"acl": [ "luci-app-rrwg" ]
+		}
+	}
+}

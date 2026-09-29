@@ -1,0 +1,927 @@
+#!/usr/bin/ucode
+// luci.rrwg - ubus backend for RR WARP Scanner NG.
+//
+// The scanning engine is the Go binary at /usr/bin/rrwg (fork of warpscout-tg).
+// This backend only marshals ubus calls into engine invocations and reads back
+// the engine's JSON report + progress file; it holds no scan logic of its own.
+//
+// Contract with the engine:
+//   rrwg scan ... --json          -> JSON report on stdout
+//   rrwg scan ... --progress FILE  -> one line, rewritten atomically:
+//                                    phase1:<done>:<total> | phase2:<done>:<total> | done
+//   account file                   -> /etc/rrwg-account.json (same schema as upstream)
+
+// NOTE: no 'use strict' here. Under rpcd's module loader strict mode made the
+// method table below fail to resolve at call time - getSettings and version
+// answered while accountStatus returned "Unknown error" from the same object.
+// The rest of the file is written as if strict anyway.
+
+import { popen, readfile, writefile, stat, unlink, mkdir } from 'fs';
+
+const BIN = '/usr/bin/rrwg';
+// Recorded so a failure report can state what the package was built for;
+// the binary is aarch64, while the package itself is marked 'all' because
+// it is mostly scripts - which is exactly how it lands on wrong hardware.
+const ENGINE_ARCH = 'aarch64_cortex-a53 (mediatek/filogic, Cortex-A53)';
+const BIN_DIR_UCODE = '/usr/share/rpcd/ucode/luci.rrwg';
+const ACCOUNT = '/etc/rrwg-account.json';
+const SETTINGS = '/etc/rrwg-settings.json';
+const RESULT = '/tmp/rrwg_result.json';        // fresh scan result
+const RESULT_SAVED = '/etc/rrwg-last-result.json'; // survives reboot
+// State lives in a directory of its own. The name deliberately differs from the
+// binary's (/usr/bin/rrwg) and from the account file's stem: an earlier layout
+// used /tmp/rrwg as a directory while /tmp/rrwg-account.json and /tmp/rrwg.json
+// sat next to it, and ucode's fs.mkdir() silently failed to create it, so every
+// state write turned into a file at that path and the scan could not start.
+const RUNDIR = '/tmp/rrwg-state';
+const PROGRESS = RUNDIR + '/progress';
+const PIDFILE = RUNDIR + '/pid';
+const LOG = RUNDIR + '/scan.log';
+const RPC_LOG = '/tmp/rrwg.rpc.log';
+const SCAN_ID = RUNDIR + '/scanid';
+const REG_LOG = RUNDIR + '/register.log';
+const REG_MARK = RUNDIR + '/registering';
+
+// RouteRich hardware OUI, checked by device_check below. Every const lives at
+// the top of the file: this ucode build mis-resolves a const declared between
+// functions, which surfaced as "left-hand side is not a function" from two
+// unrelated methods (same class of bug as the missing global join()/map()).
+const RRWG_OUI = '24:0f:5e';
+
+// The engine decides its own protocol default (see engine/warp.go: on this
+// network plain WireGuard tunnels come up and pass no data). Declared here, above
+// every caller, because this ucode build cannot resolve a forward reference.
+function default_proto() {
+	return 'awg';
+}
+
+// Mirrors poolsV4 in the engine (pools.go) - the subnets the UI lets you exclude.
+//
+// MUST be declared before any function that reads it. targets_from_excludes()
+// below iterates SUBNETS; with the list declared further down, that read saw an
+// uninitialised binding, the loop body never ran, and the function answered null
+// - which the caller reads as "no exclusions", so every exclusion was silently
+// ignored and the scan covered the whole pool.
+const SUBNETS = [
+	'8.6.112.0/24', '8.34.70.0/24', '8.34.146.0/24', '8.35.211.0/24',
+	'8.39.125.0/24', '8.39.204.0/24', '8.39.214.0/24', '8.47.69.0/24',
+	'162.159.192.0/24', '162.159.195.0/24', '188.114.96.0/24', '188.114.97.0/24',
+	'188.114.98.0/24', '188.114.99.0/24',
+];
+
+// ucode on this build has no global join()/map(): serialize by hand.
+function join_list(list, sep) {
+	let out = '';
+	for (let i = 0; i < length(list); i++)
+		out += (i ? sep : '') + list[i];
+	return out;
+}
+
+function json_escape(s) {
+	s = '' + s;
+	s = replace(s, '\\', '\\\\');
+	s = replace(s, '"', '\\"');
+	s = replace(s, '\n', '\\n');
+	s = replace(s, '\r', '\\r');
+	s = replace(s, '\t', '\\t');
+	return s;
+}
+
+// Passing the surviving subnets as --target is how exclusions reach the engine;
+// returning null means "no exclusions, use the built-in pools".
+//
+// Built with string concatenation rather than join_list(): a call to another
+// user function from inside this one resolved to null here even with join_list
+// declared above it, and the failure was silent (the call answered null, so
+// every exclusion was ignored and the scan covered the whole pool). An earlier
+// inline copy of this same loop produced the right string, which is what
+// pointed at the cross-function call. Keep this self-contained.
+function targets_from_excludes(exclude) {
+	if (type(exclude) != 'array' || !length(exclude)) return null;
+	let out = '';
+	let kept = 0;
+	for (let i = 0; i < length(SUBNETS); i++) {
+		let sub = SUBNETS[i];
+		let drop = false;
+		for (let j = 0; j < length(exclude); j++) {
+			let ex = '' + exclude[j];
+			if (length(ex) && ex == sub) { drop = true; break; }
+		}
+		if (drop) continue;
+		out += (kept ? ',' : '') + sub;
+		kept++;
+	}
+	if (!kept) return null;
+	return out;
+}
+
+// Guard rails, mirrored in the UI. The engine is far cheaper than the old
+// kernel-module scanner (no interface rebuild per endpoint), but a full pool run
+// on two Cortex-A53 cores is still minutes, so the UI caps these too.
+const HOSTS_MAX = 4318;
+// Measured on the router (2026-09-29, full pool / 126 endpoints, 2-core
+// Cortex-A53): 8 jobs -> 68.6s, 32 -> 28.0s, 64 -> 21.9s, 128 -> 25.1s,
+// 192 -> 21.9s (load 3.4), 256 -> 25.2s. The plateau is at ~64: past it the
+// time stops improving while load climbs. 32 was a guess and cost half the
+// throughput; 64 is the measured optimum.
+const JOBS_MAX = 64;
+const TIMEOUT_MAX = 30;
+const SAMPLE_MAX = 256;
+
+const DEFAULTS = {
+	hosts: 500,
+	timeout: 3,
+	jobs: 8,
+	sample: 0,
+	proto: 'awg',
+	tg: 1,
+	tun_ping: 1,
+	stable_only: 1,
+	port: 0,
+	exclude: [],
+	exclude_nodes: [],
+	include_nodes: [],
+	include_countries: [],
+	exclude_countries: [],
+	jc: 6, jmin: 10, jmax: 50,
+	gen_i1: '',
+	i1: '',
+	i1_sni: '',
+	full: 0,
+	ipv6: 0,
+	speed: 0,
+	speed_top: 5,
+};
+
+// ---------------------------------------------------------------- helpers --
+
+function trim_or(v, dflt) {
+	const s = v == null ? '' : '' + v;
+	return length(trim(s)) ? trim(s) : dflt;
+}
+
+function read_file(p) {
+	try { return readfile(p); } catch (e) { return null; }
+}
+
+function file_exists(p) {
+	try { return stat(p) != null; } catch (e) { return false; }
+}
+
+function to_int(v, dflt) {
+	const n = int(v);
+	return (n == null || n != n) ? dflt : n;
+}
+
+function clamp(n, lo, hi) {
+	if (n < lo) return lo;
+	if (n > hi) return hi;
+	return n;
+}
+
+// rpcd file-exec loses empty argv entries, so nothing empty is ever passed.
+function shellquote(s) {
+	return "'" + replace('' + s, "'", "'\\''") + "'";
+}
+
+function command(cmd) {
+	try { return trim(popen(cmd)?.read?.('all') ?? ''); } catch (e) { return ''; }
+}
+
+// fs.mkdir() in this ucode build does not actually create the directory and
+// reports no error, so the state directory goes through the shell instead.
+function ensure_rundir() {
+	if (!file_exists(RUNDIR)) command('mkdir -p ' + shellquote(RUNDIR));
+	return file_exists(RUNDIR);
+}
+
+// Diagnostics for a foreign router, where the package may be installed on
+// hardware it was not built for. Two failure shapes matter and they look the
+// same from outside ("nothing happens"):
+//   * the binary is absent (bad install),
+//   * the binary exists but cannot execute (wrong CPU architecture - the file
+//     is there, chmod +x succeeds, and the kernel still refuses to run it).
+// syslog() puts both in logread, which is the first place anyone looks.
+
+// Writes one line to the system log. The rpcd ucode environment has no syslog
+// binding here, so logger(1) is the portable route; failures are non-fatal.
+function syslog(msg) {
+	try { command('logger -t rrwg ' + shellquote(msg)); } catch (e) {}
+}
+
+// Can the engine actually run? `version` is the cheapest subcommand and exits
+// without touching the network, so this is safe to call often.
+function engine_runs() {
+	if (!file_exists(BIN)) return false;
+	const out = command(BIN + ' version 2>&1');
+	// A working engine prints a version string; a wrong-architecture binary
+	// produces the shell's own error instead.
+	return length(out) > 0 && !match(out, /not found|Exec format error|Illegal instruction|Permission denied|No such file/);
+}
+
+// One-shot environment report, logged when the package's pieces are missing or
+// unusable. Deliberately verbose: on a foreign router this block is the whole
+// diagnosis, and it is far cheaper than a round trip asking for more detail.
+function log_env(reason) {
+	syslog('СБОЙ: ' + reason);
+	syslog('  архитектура роутера: ' + command('cat /etc/openwrt_release 2>/dev/null | grep DISTRIB_ARCH | cut -d= -f2') +
+		' / ' + command('opkg print-architecture 2>/dev/null | tail -1'));
+	syslog('  пакет собран под: ' + ENGINE_ARCH);
+	syslog('  движок ' + BIN + ': ' + (file_exists(BIN) ? 'есть' : 'ОТСУТСТВУЕТ'));
+	if (file_exists(BIN)) {
+		syslog('  движок version -> ' + command(BIN + ' version 2>&1 | head -1'));
+		syslog('  права: ' + command('ls -l ' + BIN + ' 2>&1'));
+		syslog('  ELF: ' + command('head -c 20 ' + BIN + ' 2>/dev/null | od -c | head -1'));
+	}
+	syslog('  бэкенд: ' + BIN_DIR_UCODE + (file_exists(BIN_DIR_UCODE) ? ' есть' : ' ОТСУТСТВУЕТ'));
+	syslog('  аккаунт: ' + ACCOUNT + (file_exists(ACCOUNT) ? ' есть' : ' отсутствует (нужна регистрация)'));
+	syslog('  свободно на /overlay: ' + command('df -h /overlay 2>/dev/null | tail -1'));
+	syslog('  свободно в /tmp: ' + command('df -h /tmp 2>/dev/null | tail -1'));
+}
+
+function rpclog(method, detail) {
+	try {
+		let prev = read_file(RPC_LOG) ?? '';
+		if (length(prev) > 32768) prev = substr(prev, length(prev) - 16384);
+		writefile(RPC_LOG, prev + '[' + localtime() + '] ' + method + ' ' + (detail ?? '') + '\n');
+	} catch (e) {}
+}
+
+function read_json_file(p) {
+	const raw = read_file(p);
+	if (!raw || !length(trim(raw))) return null;
+	try { return json(raw); } catch (e) { return null; }
+}
+
+// ---------------------------------------------------------------- account ---
+
+// Declared BEFORE account_status on purpose: this ucode build does not resolve a
+// forward reference to a function declared later in the file. account_status
+// calling a register_running defined below it produced
+// "left-hand side is not a function" from the ubus call, while the same function
+// worked when tested in isolation. Keep callee-above-caller ordering here.
+function register_running() {
+	if (!file_exists(REG_MARK)) return false;
+	// Deliberately not pgrep via popen: a popen whose child exits non-zero made
+	// the whole ubus method answer "Unknown error" instead of its result. The
+	// pidfile is enough, and /proc is cheaper.
+	const pid = trim(read_file(PIDFILE) ?? '');
+	if (!length(pid)) return false;
+	// A stale marker must not report a live registration after a crash.
+	return file_exists('/proc/' + pid);
+}
+
+function account_status() {
+	if (!file_exists(ACCOUNT))
+		return { registered: false, registering: register_running() };
+	let a = read_json_file(ACCOUNT);
+	if (!a || !a.id)
+		return { registered: false, registering: register_running() };
+	let id = a.id;
+	let addr = a.address;
+	let priv = a.private_key;
+	let peer = a.peer_public_key;
+	return {
+		registered: true,
+		registering: register_running(),
+		id: id == null ? '' : id,
+		address: addr == null ? '' : addr,
+		private_key: priv == null ? '' : priv,
+		peer_public_key: peer == null ? '' : peer,
+	};
+}
+
+// RouteRich hardware check, kept from the previous package: physical NICs carry
+// the 24:0F:5E OUI. Informational only - it never blocks the page.
+function device_check() {
+	const candidates = ['br-lan', 'eth0', 'lan1', 'lan2', 'lan3', 'eth1'];
+	const macs = {};
+	let authorized = false;
+	for (let i = 0; i < length(candidates); i++) {
+		const mac = trim(read_file('/sys/class/net/' + candidates[i] + '/address') ?? '');
+		if (!length(mac)) continue;
+		macs[candidates[i]] = mac;
+		if (substr(mac, 0, 8) == RRWG_OUI) authorized = true;
+	}
+	return {
+		authorized,
+		macs,
+		oui: '24:0F:5E',
+		board_name: trim(read_file('/tmp/sysinfo/board_name') ?? ''),
+		distrib_id: (function() {
+			const rel = read_file('/etc/openwrt_release') ?? '';
+			const lines = split(rel, '\n');
+			for (let i = 0; i < length(lines); i++) {
+				const m = match(lines[i], /^DISTRIB_ID='?([^']+)'?/);
+				if (m) return trim(m[1]);
+			}
+			return '';
+		})(),
+	};
+}
+
+function uci_get(sel) {
+	return command('uci -q get ' + sel);
+}
+
+// Values the UI needs to build a client .conf for a found endpoint. The engine's
+// account is the source of truth so a pasted config pairs with THIS account.
+function conf_base() {
+	const a = account_status();
+	const I1_DEFAULT = '<r 2><b 0x858000010001000000000669636c6f756403636f6d0000010001c00c000100010000105a00044d583737>';
+	return {
+		registered: a.registered,
+		address: (a.address ? a.address + '/32' : (uci_get('network.warp.addresses') || '172.16.0.2/32')),
+		private_key: a.private_key || uci_get('network.warp.private_key'),
+		peer_public_key: a.peer_public_key || uci_get('network.warp_peer.public_key') || 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=',
+		jc: uci_get('network.warp.awg_jc') || '6',
+		jmin: uci_get('network.warp.awg_jmin') || '10',
+		jmax: uci_get('network.warp.awg_jmax') || '50',
+		i1: uci_get('network.warp.awg_i1') || I1_DEFAULT,
+		dns: '1.1.1.1, 1.0.0.1',
+		mtu: uci_get('network.warp.mtu') || '1280',
+		keepalive: uci_get('network.warp_peer.persistent_keepalive') || '25',
+		allowed_ips: uci_get('network.warp_peer.allowed_ips') || '0.0.0.0/0',
+	};
+}
+
+// --------------------------------------------------------------- settings ---
+
+// Widely-seen Cloudflare WARP edge codes, used only to seed the node pick-list.
+// Cloudflare assigns the colo per endpoint at connect time, so this is a
+// convenience list, not a contract: an endpoint on a node absent here still
+// works, and a code here that this network never reaches simply never matches.
+// DME (Moscow) leads because it is the one routinely filtered from RU ISPs.
+const KNOWN_NODES = [
+	'DME', 'LED', 'KJA', 'OVB',
+	'ARN', 'CPH', 'HEL', 'OSL', 'AMS', 'FRA', 'CDG', 'LHR', 'MAD', 'MXP',
+	'WAW', 'PRG', 'VIE', 'BUD', 'OTP', 'SOF', 'IST', 'TLV',
+	'KBP', 'RIX', 'VNO', 'TLL',
+	'DXB', 'SIN', 'HKG', 'NRT', 'KIX', 'ICN', 'BOM', 'DEL',
+	'JFK', 'EWR', 'IAD', 'ORD', 'DFW', 'LAX', 'SEA', 'SJC', 'MIA', 'YYZ',
+	'GRU', 'EZE', 'SYD', 'AKL', 'JNB',
+];
+
+// Codes this router has actually reached, newest result first, plus the seed
+// list. Sorted with DME pinned to the top so the usual exclusion is one click.
+function known_nodes() {
+	let seen = {};
+	// Current result, then the archived one: both are cheap reads.
+	const files = [RESULT, RESULT_SAVED];
+	for (let f = 0; f < length(files); f++) {
+		const d = read_json_file(files[f]);
+		if (!d || type(d.endpoints) != 'array') continue;
+		for (let i = 0; i < length(d.endpoints); i++) {
+			const n = d.endpoints[i].node;
+			if (type(n) == 'string' && length(n)) seen[n] = true;
+		}
+	}
+	for (let i = 0; i < length(KNOWN_NODES); i++) seen[KNOWN_NODES[i]] = true;
+	// Include anything already configured, so a saved value never disappears
+	// from the list that is supposed to represent it.
+	const s = read_json_file(SETTINGS) ?? {};
+	const lists = [s.exclude_nodes, s.include_nodes];
+	for (let l = 0; l < length(lists); l++) {
+		if (type(lists[l]) != 'array') continue;
+		for (let i = 0; i < length(lists[l]); i++) {
+			const v = trim('' + lists[l][i]);
+			if (length(v)) seen[v] = true;
+		}
+	}
+
+	let out = [];
+	for (let i = 0; i < length(KNOWN_NODES); i++)
+		if (seen[KNOWN_NODES[i]]) { push(out, KNOWN_NODES[i]); delete seen[KNOWN_NODES[i]]; }
+	// remaining codes, alphabetically
+	let rest = keys(seen);
+	// simple insertion sort: this build has no global sort() for association keys
+	for (let i = 1; i < length(rest); i++) {
+		let v = rest[i], j = i - 1;
+		while (j >= 0 && rest[j] > v) { rest[j + 1] = rest[j]; j--; }
+		rest[j + 1] = v;
+	}
+	for (let i = 0; i < length(rest); i++) push(out, rest[i]);
+	return out;
+}
+
+function get_settings() {
+	let s = read_json_file(SETTINGS) ?? {};
+	let out = {};
+	const keys = ['hosts', 'timeout', 'jobs', 'sample', 'proto', 'tg', 'tun_ping',
+		'stable_only', 'port', 'jc', 'jmin', 'jmax', 'gen_i1', 'i1', 'i1_sni',
+		'full', 'ipv6', 'speed', 'speed_top', 'exclude', 'exclude_nodes', 'include_nodes',
+		'include_countries', 'exclude_countries'];
+	for (let i = 0; i < length(keys); i++) {
+		const k = keys[i];
+		out[k] = (s[k] != null) ? s[k] : DEFAULTS[k];
+	}
+	out.subnets = SUBNETS;
+	// Node/country pick-list for the UI. The engine learns the colo (IATA) from
+	// Cloudflare per endpoint and ships no static list, so candidates come from
+	// what this router has actually reached, unioned with the widely-seen WARP
+	// edge codes. The UI renders these as a checkbox dropdown; a code that never
+	// appears simply never matches.
+	out.nodes = known_nodes();
+	return out;
+}
+
+function json_array_of_strings(list) {
+	if (type(list) != 'array') return '[]';
+	let parts = [];
+	for (let i = 0; i < length(list); i++) {
+		const v = trim('' + list[i]);
+		if (length(v)) push(parts, '"' + json_escape(v) + '"');
+	}
+	return '[' + join_list(parts, ',') + ']';
+}
+
+function json_array_of_ints(list) {
+	if (type(list) != 'array') return '[]';
+	let parts = [];
+	for (let i = 0; i < length(list); i++) {
+		const v = int(list[i]);
+		if (v != null && v == v) push(parts, '' + v);
+	}
+	return '[' + join_list(parts, ',') + ']';
+}
+
+function save_opts(req) {
+	const a = req.args ?? {};
+	const before = read_json_file(SETTINGS) ?? {};
+	const merged = {};
+	// Start from what is stored so a partial update never wipes a field.
+	for (let k in get_settings())
+		if (k != 'subnets') merged[k] = get_settings()[k];
+
+	if (a.hosts != null) merged.hosts = clamp(to_int(a.hosts, DEFAULTS.hosts), 1, HOSTS_MAX);
+	if (a.timeout != null) merged.timeout = clamp(to_int(a.timeout, DEFAULTS.timeout), 1, TIMEOUT_MAX);
+	if (a.jobs != null) merged.jobs = clamp(to_int(a.jobs, DEFAULTS.jobs), 1, JOBS_MAX);
+	if (a.sample != null) merged.sample = clamp(to_int(a.sample, 0), 0, SAMPLE_MAX);
+	if (a.port != null) merged.port = clamp(to_int(a.port, 0), 0, 65535);
+	if (a.proto != null) merged.proto = trim_or(a.proto, default_proto());
+	if (a.tg != null) merged.tg = a.tg ? 1 : 0;
+	if (a.tun_ping != null) merged.tun_ping = a.tun_ping ? 1 : 0;
+	if (a.stable_only != null) merged.stable_only = a.stable_only ? 1 : 0;
+	if (a.full != null) merged.full = a.full ? 1 : 0;
+	if (a.ipv6 != null) merged.ipv6 = a.ipv6 ? 1 : 0;
+	if (a.speed != null) merged.speed = a.speed ? 1 : 0;
+	if (a.speed_top != null) merged.speed_top = clamp(to_int(a.speed_top, 5), 1, 40);
+	if (a.jc != null) merged.jc = clamp(to_int(a.jc, 6), 1, 128);
+	if (a.jmin != null) merged.jmin = clamp(to_int(a.jmin, 10), 1, 1280);
+	if (a.jmax != null) merged.jmax = clamp(to_int(a.jmax, 50), 1, 1280);
+	// The engine refuses jmin > jmax, so keep the pair consistent
+	// whatever the two fields were set to independently.
+	if (merged.jmin > merged.jmax) merged.jmin = merged.jmax;
+	if (a.gen_i1 != null) merged.gen_i1 = trim_or(a.gen_i1, '');
+	if (a.i1 != null) merged.i1 = trim_or(a.i1, '');
+	if (a.i1_sni != null) merged.i1_sni = trim_or(a.i1_sni, '');
+	if (a.exclude != null) merged.exclude = a.exclude;
+	if (a.exclude_nodes != null) merged.exclude_nodes = a.exclude_nodes;
+	if (a.include_nodes != null) merged.include_nodes = a.include_nodes;
+	if (a.include_countries != null) merged.include_countries = a.include_countries;
+	if (a.exclude_countries != null) merged.exclude_countries = a.exclude_countries;
+
+	const body =
+		'{"hosts":' + merged.hosts +
+		',"timeout":' + merged.timeout +
+		',"jobs":' + merged.jobs +
+		',"sample":' + merged.sample +
+		',"port":' + merged.port +
+		',"proto":"' + json_escape(merged.proto) + '"' +
+		',"tg":' + merged.tg +
+		',"tun_ping":' + merged.tun_ping +
+		',"stable_only":' + merged.stable_only +
+		',"full":' + merged.full +
+		',"ipv6":' + merged.ipv6 +
+		',"speed":' + merged.speed +
+		',"speed_top":' + merged.speed_top +
+		',"jc":' + merged.jc +
+		',"jmin":' + merged.jmin +
+		',"jmax":' + merged.jmax +
+		',"gen_i1":"' + json_escape(merged.gen_i1) + '"' +
+		',"i1":"' + json_escape(merged.i1) + '"' +
+		',"i1_sni":"' + json_escape(merged.i1_sni) + '"' +
+		',"exclude":' + json_array_of_strings(merged.exclude) +
+		',"exclude_nodes":' + json_array_of_strings(merged.exclude_nodes) +
+		',"include_nodes":' + json_array_of_strings(merged.include_nodes) +
+		',"include_countries":' + json_array_of_strings(merged.include_countries) +
+		',"exclude_countries":' + json_array_of_strings(merged.exclude_countries) +
+		'}';
+
+	try {
+		writefile(SETTINGS, body);
+	} catch (e) {
+		return { error: 'cannot write settings: ' + e };
+	}
+	return { saved: true, settings: get_settings() };
+}
+
+// ------------------------------------------------------------------ scan ----
+
+function scan_running() {
+	if (!file_exists(PIDFILE)) return false;
+	const pid = trim(read_file(PIDFILE) ?? '');
+	if (!length(pid)) return false;
+	// /proc/<pid> exists only while the process does; a stale pidfile after a
+	// crash or reboot must not make the page think a scan is live.
+	return file_exists('/proc/' + pid);
+}
+
+
+// Translate a total host count into the engine's per-subnet -n. Rounded UP so a
+// small request never collapses to zero, and floored at 1 so a scan always
+// covers at least one address per subnet it touches.
+function per_subnet_sample(total, exclude) {
+	const n = to_int(total, 0);
+	if (n <= 0) return 1;
+	let count = length(SUBNETS);
+	const targets = targets_from_excludes(exclude);
+	if (targets != null) count = length(split(targets, ','));
+	const per = int((n + count - 1) / count);
+	return per < 1 ? 1 : per;
+}
+
+function build_scan_args(s) {
+	let args = [];
+	// account + output contract
+	push(args, '-a', ACCOUNT);
+	push(args, '--json');
+	push(args, '--progress', PROGRESS);
+
+	// protocol and scale
+	push(args, '-p', s.proto);
+	if (s.tun_ping) push(args, '-P');
+	if (s.tg) push(args, '--tg');
+	// The UI asks for a TOTAL host count; the engine's -n is addresses PER
+	// SUBNET and multiplies by the pool count. Passing the UI number straight
+	// through turned "12 hosts" into 168 probes and a multi-minute scan.
+	if (s.full) push(args, '-f');
+	else push(args, '-n', '' + per_subnet_sample(s.sample, s.exclude));
+	push(args, '-t', '' + s.timeout);
+	push(args, '-jt', '' + s.jobs);
+	if (s.port) push(args, '--port', '' + s.port);
+	if (s.ipv6) push(args, '-6');
+	if (s.speed) {
+		push(args, '--speed');
+		// Without a cap the engine measures every endpoint the tables pick,
+		// which on a full pool is dozens of multi-second downloads while the
+		// user waits on the page.
+		if (s.speed_top > 0) push(args, '--speed-top', '' + s.speed_top);
+	}
+
+	// node/country filters
+	if (length(s.include_nodes)) push(args, '--node', join_list(s.include_nodes, ','));
+	if (length(s.include_countries)) push(args, '--country', join_list(s.include_countries, ','));
+	if (length(s.exclude_countries)) push(args, '--exclude-country', join_list(s.exclude_countries, ','));
+	if (length(s.exclude_nodes)) push(args, '--exclude-node', join_list(s.exclude_nodes, ','));
+
+	// obfuscation
+	if (s.gen_i1) push(args, '--gen-i1', s.gen_i1);
+	if (s.i1) push(args, '--i1', s.i1);
+	if (s.i1_sni) push(args, '--i1-sni', s.i1_sni);
+	if (s.jc != null) push(args, '-jc', '' + s.jc);
+	if (s.jmin != null) push(args, '-jmin', '' + s.jmin);
+	if (s.jmax != null) push(args, '-jmax', '' + s.jmax);
+
+	// The engine has no subnet-exclude flag, so the UI subtracts them from the
+	// pool list and passes the remainder as explicit --target.
+	const targets = targets_from_excludes(s.exclude);
+	if (targets != null) push(args, '--target', targets);
+
+	return args;
+}
+
+function scan_start(req) {
+	if (scan_running())
+		return { error: 'scan already running' };
+	if (!file_exists(ACCOUNT))
+		return { error: 'no WARP account - register one first' };
+
+	// Refuse to claim a run started when the engine cannot even be executed.
+	// Without this the old code answered {"started": true} with /usr/bin/rrwg
+	// missing, and the only trace was "not found" buried in the scan log while
+	// the UI waited for a scan that would never produce anything.
+	if (!file_exists(BIN)) {
+		log_env('движок отсутствует: ' + BIN);
+		return { error: 'движок не найден: ' + BIN + ' — пакет повреждён. Подробности: logread | grep rrwg' };
+	}
+	if (!engine_runs()) {
+		log_env('движок не запускается (' + BIN + ' version не отвечает)');
+		return { error: 'движок не запускается — вероятно, пакет не подходит этой архитектуре (' +
+			'собран под ' + ENGINE_ARCH + '). Подробности: logread | grep rrwg' };
+	}
+
+	// Persist what the run used so the form and the result always agree.
+	const sv = save_opts(req);
+	if (sv.error) return sv;
+	const s = get_settings();
+
+	ensure_rundir();
+	// The previous result becomes the saved one, so a restart of the page still
+	// shows something while the new scan runs.
+	if (file_exists(RESULT)) {
+		const prev = read_file(RESULT);
+		if (prev != null) writefile(RESULT_SAVED, prev);
+	}
+	try { unlink(RESULT); } catch (e) {}
+	// Clear the previous run's pid and progress first, so a stale pid cannot make
+	// the new scan look alive (or dead) before it writes its own.
+	try { unlink(PIDFILE); } catch (e) {}
+	try { unlink(PROGRESS); } catch (e) {}
+	writefile(PROGRESS, 'starting\n');
+	writefile(SCAN_ID, '' + localtime());
+
+	let argv = build_scan_args(s);
+	// The "scan" subcommand is mandatory - the engine dispatches on argv[1] and
+	// answers "unknown command "-a"" without it.
+	let cmd = BIN + ' scan';
+	for (let i = 0; i < length(argv); i++) cmd += ' ' + shellquote(argv[i]);
+	cmd += ' > ' + RESULT + ' 2> ' + LOG;
+
+	// setsid + immediate return: a LuCI rpc request dies at ~20s, and a scan is
+	// minutes. The UI polls scanStatus instead.
+	//
+	// The pid comes from the shell's own $!, not from pgrep: inside rpcd's popen
+	// context pgrep returned nothing, so the pidfile stayed empty and scanStatus
+	// declared the run finished the moment it started. setsid execs the shell
+	// directly, so $! IS the engine process and /proc/<pid> tracks it.
+	const runner = 'setsid sh -c ' + shellquote('echo $$ > ' + PIDFILE + '; exec ' + cmd) +
+		' < /dev/null > /dev/null 2>&1 &';
+	command(runner);
+
+	// Wait for the pidfile to appear (bounded), then report whether the run is
+	// really alive. The earlier version spun with no sleep, which never gave
+	// setsid a chance and produced a bogus "pidfile missing" every time; the
+	// fix is a real bounded wait, not no wait at all. Without this, scanStart
+	// returns while the pidfile is still absent, the page's first poll reads
+	// running=false, and the UI concludes the scan already finished - leaving
+	// the previous result on screen until the user reloads.
+	let waited = 0;
+	while (waited < 40 && !file_exists(PIDFILE)) {
+		command('sleep 0.05');
+		waited++;
+	}
+	const startedPid = trim(read_file(PIDFILE) ?? '');
+	const alive = length(startedPid) > 0 && file_exists('/proc/' + startedPid);
+
+	// One line that answers the questions the old log did not: what was scanned,
+	// with what limits, where the output went. targets shows the exact pools the
+	// run covers, which is what makes "why did it scan that subnet" answerable.
+	const targetDesc = targets_from_excludes(s.exclude) ?? 'весь пул (14 подсетей)';
+	rpclog('scanStart',
+		'proto=' + s.proto +
+		' perSubnet=' + per_subnet_sample(s.sample, s.exclude) +
+		' total~' + s.sample +
+		' jobs=' + s.jobs +
+		' timeout=' + s.timeout +
+		' tg=' + (s.tg ? 'on' : 'off') +
+		' tunPing=' + (s.tun_ping ? 'on' : 'off') +
+		' speed=' + (s.speed ? ('top' + s.speed_top) : 'off') +
+		' port=' + (s.port > 0 ? s.port : 'auto') +
+		' targets=' + targetDesc);
+	rpclog('scanStart', 'pid=' + (length(startedPid) ? startedPid : '?') +
+		' alive=' + alive +
+		' out=' + RESULT + ' log=' + LOG);
+
+	// Report the truth: if the process did not come up within the bounded wait,
+	// say so here rather than letting the page poll a scan that never started.
+	if (!alive) {
+		const tail = read_file(LOG) ?? '';
+		syslog('scanStart: движок не поднялся за 2с (pid=' + (length(startedPid) ? startedPid : 'нет') +
+			'), вывод: ' + substr(tail, 0, 200));
+		return { error: 'движок не запустился — проверьте logread | grep rrwg' };
+	}
+	return { started: true };
+}
+
+function scan_stop() {
+	if (!scan_running()) {
+		try { unlink(PIDFILE); } catch (e) {}
+		return { stopped: false, error: 'not running' };
+	}
+	const pid = trim(read_file(PIDFILE) ?? '');
+	if (length(pid)) {
+		// Kill the whole group: the engine spawns nothing, but sh -c may still be
+		// alive around it.
+		const pgid = trim(command("awk '{print $5}' /proc/" + pid + '/stat 2>/dev/null'));
+		if (length(pgid)) command('kill -TERM -- -' + pgid + ' 2>/dev/null');
+		command('kill -TERM ' + pid + ' 2>/dev/null');
+	}
+	try { unlink(PIDFILE); } catch (e) {}
+	rpclog('scanStop', 'pid=' + pid);
+	return { stopped: true };
+}
+
+function scan_status() {
+	const running = scan_running();
+	const raw = read_file(PROGRESS) ?? '';
+	const line = trim(raw);
+	let phase = 'idle', done = 0, total = 0;
+	if (length(line)) {
+		const parts = split(line, ':');
+		if (parts[0] == 'done') {
+			phase = 'done';
+		} else if (length(parts) >= 3) {
+			phase = parts[0];
+			done = to_int(parts[1], 0);
+			total = to_int(parts[2], 0);
+		} else if (parts[0] == 'starting') {
+			phase = 'starting';
+		}
+	}
+	// The engine writes "done" but the file stays; trust the process instead.
+	if (!running && phase != 'done' && phase != 'idle') phase = (phase == 'starting' ? 'idle' : 'done');
+
+	let percent = 0;
+	if (phase == 'done') percent = 100;
+	else if (total > 0) percent = int(done * 100 / total);
+
+	const res = read_json_file(RESULT);
+	let alive = 0, tg = 0;
+	if (res && res.endpoints) {
+		for (let i = 0; i < length(res.endpoints); i++) {
+			if (!res.endpoints[i].torn) alive++;
+			if (res.endpoints[i].tg_ok) tg++;
+		}
+	}
+
+	return {
+		running,
+		phase,
+		done,
+		total,
+		percent,
+		alive,
+		tg_alive: tg,
+		scanned: done,
+	};
+}
+
+function scan_result() {
+	// Prefer a fresh result (even an empty one: "found nothing" is an answer);
+	// fall back to the last saved run only when nothing has run since boot.
+	const hasFresh = file_exists(RESULT);
+	const src = hasFresh ? RESULT : RESULT_SAVED;
+	const d = read_json_file(src);
+	if (!d)
+		return { endpoints: [], updated: 0, saved: false };
+	let st = null;
+	try { st = stat(src); } catch (e) {}
+	return {
+		endpoints: d.endpoints ?? [],
+		working: d.working ?? 0,
+		probed: d.probed ?? 0,
+		tg_working: d.tg_working ?? 0,
+		tg_total: d.tg_total ?? 5,
+		error_text: d.error ?? '',
+		updated: st ? st.mtime : 0,
+		saved: !hasFresh,
+	};
+}
+
+function scan_log() {
+	const wscan = read_file(LOG) ?? '';
+	const rpc = read_file(RPC_LOG) ?? '';
+	return {
+		rrwg: length(wscan) > 40000 ? substr(wscan, length(wscan) - 40000) : wscan,
+		rpc: length(rpc) > 8000 ? substr(rpc, length(rpc) - 8000) : rpc,
+	};
+}
+
+function scan_log_clear() {
+	try { writefile(LOG, ''); } catch (e) {}
+	try { writefile(RPC_LOG, ''); } catch (e) {}
+	return { cleared: true };
+}
+
+// ------------------------------------------------------------ registration --
+
+function register_start(renew) {
+	if (register_running())
+		return { error: 'registration already running' };
+	ensure_rundir();
+	let extra = renew ? ' --fresh' : '';
+	const cmd = BIN + ' register -a ' + shellquote(ACCOUNT) + extra + ' > ' + REG_LOG + ' 2>&1';
+	// Same $! pid capture as scan_start: register_running() reads this pidfile to
+	// tell a live registration from a stale marker.
+	try { unlink(PIDFILE); } catch (e) {}
+	command('setsid sh -c ' + shellquote('echo $$ > ' + PIDFILE + '; exec ' + cmd) +
+		' < /dev/null > /dev/null 2>&1 &');
+	writefile(REG_MARK, '1');
+	rpclog('register', renew ? 'renew' : 'new');
+	return { started: true };
+}
+
+function delete_account() {
+	try { unlink(ACCOUNT); } catch (e) {}
+	return { deleted: true, account: false };
+}
+
+// ------------------------------------------------------------------ apply ---
+
+// Point an existing uci WireGuard/AmneziaWG interface at a found endpoint.
+function apply_best(req) {
+	const iface = trim_or(req.args?.iface, 'warp');
+	const endpoint = trim_or(req.args?.endpoint, '');
+	if (!length(endpoint))
+		return { error: 'no endpoint given' };
+	const m = match(endpoint, /^(\d+\.\d+\.\d+\.\d+):(\d+)$/);
+	if (!m)
+		return { error: 'bad endpoint: ' + endpoint };
+
+	const check = command('uci -q get network.' + iface + '_peer >/dev/null 2>&1; echo $?');
+	if (trim(check) != '0')
+		return { error: "peer section '" + iface + "_peer' not found" };
+
+	command('uci -q set network.' + iface + '_peer.endpoint_host=' + shellquote(m[1]));
+	command('uci -q set network.' + iface + '_peer.endpoint_port=' + shellquote(m[2]));
+	command('uci -q set network.' + iface + '_peer.persistent_keepalive=25');
+	command('uci -q set network.' + iface + '_peer.allowed_ips=' + shellquote('0.0.0.0/0'));
+	const out = command('uci commit network 2>&1; echo rc=$?');
+	command('/etc/init.d/network reload >/dev/null 2>&1');
+	rpclog('applyBest', iface + ' ' + endpoint);
+	return {
+		ok: true,
+		interface: iface,
+		endpoint: endpoint,
+		host: m[1],
+		port: m[2],
+		uci: out,
+	};
+}
+
+// ------------------------------------------------------------------- table --
+
+const methods = {
+	accountStatus: {
+		call: function() { return account_status(); }
+	},
+	deviceCheck: {
+		call: function() { return device_check(); }
+	},
+	registerLog: {
+		call: function() {
+			const l = read_file(REG_LOG) ?? '';
+			return { log: length(l) > 4000 ? substr(l, length(l) - 4000) : l };
+		}
+	},
+	confBase: {
+		call: function() { return conf_base(); }
+	},
+	version: {
+		call: function() {
+			const v = command("sed -n 's/^Version: //p' /usr/lib/opkg/info/luci-app-rrwg.control 2>/dev/null");
+			return { version: length(v) ? v : 'unknown' };
+		}
+	},
+	register: {
+		call: function() { return register_start(false); }
+	},
+	renewAccount: {
+		call: function() { return register_start(true); }
+	},
+	deleteAccount: {
+		call: function() { return delete_account(); }
+	},
+	getSettings: {
+		call: function() { return get_settings(); }
+	},
+	saveOpts: {
+		// Every accepted argument declared, or ubus rejects the whole call with
+		// "Invalid argument" before the handler ever runs.
+		args: {
+			sample: 0, timeout: 0, jobs: 0, port: 0,
+			jc: 0, jmin: 0, jmax: 0,
+			proto: '', gen_i1: '', i1: '', i1_sni: '',
+			tg: false, tun_ping: false, stable_only: false,
+			full: false, ipv6: false, speed: false, speed_top: 0,
+			exclude: [], exclude_nodes: [], include_nodes: [],
+			include_countries: [], exclude_countries: [],
+		},
+		call: function(req) { return save_opts(req); }
+	},
+	scanStart: {
+		call: function(req) { return scan_start(req); }
+	},
+	scanStop: {
+		call: function() { return scan_stop(); }
+	},
+	scanStatus: {
+		call: function() { return scan_status(); }
+	},
+	scanResult: {
+		call: function() { return scan_result(); }
+	},
+	scanLog: {
+		call: function() { return scan_log(); }
+	},
+	scanLogClear: {
+		call: function() { return scan_log_clear(); }
+	},
+	applyBest: {
+		args: { iface: '', endpoint: '' },
+		call: function(req) { return apply_best(req); }
+	},
+};
+
+return { 'luci.rrwg': methods };

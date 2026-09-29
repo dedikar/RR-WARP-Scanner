@@ -1,0 +1,20 @@
+# Line endings are forced to LF for everything that ends up on the router: a
+# CRLF in a ucode file or a shell script breaks it there, and a CRLF in a .go
+# file is a syntax error. Without this, git on Windows rewrites them to CRLF in
+# the working tree and the next build silently ships broken files.
+* text=auto eol=lf
+
+# Binary formats must be left untouched.
+*.png binary
+*.ipk binary
+*.apk binary
+*.gz binary
+
+# Explicit, so a future editor default cannot override it.
+*.sh   text eol=lf
+*.ucode text eol=lf
+*.js   text eol=lf
+*.json text eol=lf
+*.go   text eol=lf
+*.py   text eol=lf
+*.md   text eol=lf

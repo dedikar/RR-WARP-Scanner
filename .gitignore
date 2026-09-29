@@ -1,0 +1,29 @@
+# Build output: the IPK and the cross-compiled binary are reproducible from
+# source, and a 12 MB binary in git bloats the history for no gain.
+build/
+
+# Internal session/harness state (plans written by the coding agent).
+.zcode/
+
+# Scratch space used while debugging on the router.
+.tmp/
+.tmp2/
+.tmp3/
+
+# Compiled Go test binaries and coverage.
+engine/*.test
+*.out
+coverage.txt
+
+# Router credentials or exported account files, if anyone drops them here.
+# These are gitignored on purpose: this repository is published.
+*.pem
+*account*.json
+rrwg-account.json
+.env
+
+# Editor / OS noise.
+*.swp
+*~
+.DS_Store
+Thumbs.db

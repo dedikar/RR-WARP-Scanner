@@ -1,0 +1,36 @@
+{
+	"luci-app-rrwg": {
+		"description": "Grant access to RR WARP Scanner NG",
+		"read": {
+			"ubus": {
+				"luci.rrwg": [
+					"accountStatus",
+					"deviceCheck",
+					"registerLog",
+					"confBase",
+					"version",
+					"getSettings",
+					"scanStatus",
+					"scanResult",
+					"scanLog"
+				]
+			},
+			"uci": [ "network" ]
+		},
+		"write": {
+			"ubus": {
+				"luci.rrwg": [
+					"register",
+					"renewAccount",
+					"deleteAccount",
+					"saveOpts",
+					"scanStart",
+					"scanStop",
+					"scanLogClear",
+					"applyBest"
+				]
+			},
+			"uci": [ "network" ]
+		}
+	}
+}
