@@ -124,25 +124,24 @@ function injectPageCss() {
 	if (pageCssInjected) return;
 	pageCssInjected = true;
 	var css = [
+		// Panels sit one theme step above the page background and carry a frame.
+		//
+		// The frame uses the theme's own border token, NOT a white overlay. A
+		// near-opaque white frame (rgba(255,255,255,.85)) looked "foreign" against
+		// this theme: measured on the router, the theme is nearly monochrome -
+		// background high/medium/low are rgb(20,24,31) / (29,34,42) / (37,41,49),
+		// steps of ~1.1:1 - and anything brighter than that band reads as a
+		// different material rather than as part of the page. The sidebar looks
+		// right for the same reason: it is built from these steps alone.
 		'html .cbi-section.rrws-panel, html .rrws-panel {',
-		// White frame, deliberately brighter than the theme's border tokens. Those
-		// are tuned to be barely visible against the theme's own background
-		// (border-high is hsl(220 14% 22%) on hsl(220 20% 10%)), which made the
-		// panels read as undivided text. Slight transparency keeps it from being
-		// harsh in the light theme.
-		'  border: 1px solid rgba(255, 255, 255, .85);',
-		'  box-shadow: 0 0 0 1px rgba(255, 255, 255, .12);',
+		'  border: 1px solid var(--border-color-medium, rgba(128,128,128,.35));',
 		'  border-radius: 6px;',
 		'  padding: 12px 14px;',
 		'  margin: 14px 0;',
 		'  background: var(--background-color-medium, transparent);',
 		'}',
-		// On a light background a white frame is invisible, so the same rule
-		// switches to a dark frame there.
-		'html:not([data-darkmode="true"]) .cbi-section.rrws-panel, html:not([data-darkmode="true"]) .rrws-panel {',
-		'  border-color: rgba(0, 0, 0, .55);',
-		'  box-shadow: 0 0 0 1px rgba(0, 0, 0, .08);',
-		'}',
+		// On a light background the same token resolves the other way, so no
+		// separate light-theme frame is needed.
 		'.rrws-panel > h3:first-child {',
 		'  margin-top: 0;',
 		'  padding-bottom: 6px;',
@@ -151,12 +150,11 @@ function injectPageCss() {
 		// The log pane and the checkbox lists sit inside a panel and need the
 		// same treatment as the panel border, not the old fixed colours.
 		'.rrws-panel pre {',
-		'  background: var(--background-color-low, #f7f7f7);',
+		'  background: var(--background-color-high, #111);',
 		'  border: 1px solid var(--border-color-low, #e4e4e4);',
 		'}',
-		'html[data-darkmode="true"] .rrws-panel pre { background: #111; }',
 		'.rrws-checklist {',
-		'  border: 1px solid rgba(255, 255, 255, .5);',
+		'  border: 1px solid var(--border-color-medium, rgba(128,128,128,.5));',
 		'  border-radius: 4px;',
 		'}',
 		// A clickable disclosure needs to look clickable: the log summary was
@@ -165,7 +163,7 @@ function injectPageCss() {
 		'  cursor: pointer;',
 		'  padding: 6px 14px;',
 		'  font-weight: 600;',
-		'  border: 1px solid rgba(255, 255, 255, .85);',
+		'  border: 1px solid var(--border-color-medium, rgba(128,128,128,.5));',
 		'  border-radius: 6px;',
 		'  background: var(--background-color-low, transparent);',
 		'  list-style: none;',
@@ -191,47 +189,36 @@ function injectPageCss() {
 		'.rrws-disclosure[open] > summary::before { transform: rotate(90deg); }',
 		'.rrws-disclosure[open] > summary { margin-bottom: 8px; }',
 		'.rrws-disclosure[open] > summary { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }',
-		// Result cards. They used to be an inline #2228 on the panel's own dark
-		// grey: two near-identical greys stacked, so with 141 results the list
-		// read as one undifferentiated slab and the only separation came from a
-		// 4px left stripe - which is #444 on every card that is not best or torn.
-		// A card now has its own visible edge and a surface that is actually
-		// lighter than the panel it sits on.
+		// Result cards.
+		//
+		// These were an inline #2228 on the panel's own dark grey: two
+		// near-identical greys stacked, so with hundreds of results the list read
+		// as one undifferentiated slab. The first fix overcorrected with a white
+		// overlay (rgba(255,255,255,.14)) that reached 1.55:1 - readable, but it
+		// put the cards outside the theme's own tonal range and they looked like a
+		// foreign material next to the sidebar.
+		//
+		// The theme's steps are close together by design (high/medium/low are
+		// rgb(20,24,31) / (29,34,42) / (37,41,49), roughly 1.1:1 apart), so a card
+		// cannot be separated by fill alone in either direction. It leans on the
+		// 4px left stripe and a themed border for the edges, and takes
+		// --background-color-low - the one step above its panel - so it belongs to
+		// the palette while still being a distinguishable surface.
 		'.rrws-card {',
-		'  border-left: 4px solid #444;',
-		'  border-top: 1px solid var(--border-color-low, rgba(128,128,128,.35));',
-		'  border-right: 1px solid var(--border-color-low, rgba(128,128,128,.35));',
-		'  border-bottom: 1px solid var(--border-color-low, rgba(128,128,128,.35));',
+		'  border-left: 4px solid var(--border-color-high, #444);',
+		'  border-top: 1px solid var(--border-color-medium, rgba(128,128,128,.35));',
+		'  border-right: 1px solid var(--border-color-medium, rgba(128,128,128,.35));',
+		'  border-bottom: 1px solid var(--border-color-medium, rgba(128,128,128,.35));',
 		'  border-radius: 4px;',
 		'  padding: 8px 10px;',
 		'  margin: 6px 0;',
-		'}',
-		'html[data-darkmode="true"] .rrws-card {',
-		// .14, not .07: at .07 the card surface measured only 1.23:1 against the
-		// panel behind it (45,49,57 on 29,34,42), so the separation came almost
-		// entirely from the 1px edge and the fill did nothing. .14 lands the
-		// ratio near 1.5:1, which is visible as a surface rather than as an outline.
-		'  background: rgba(255, 255, 255, .14);',
-		'  border-top-color: rgba(255, 255, 255, .26);',
-		'  border-right-color: rgba(255, 255, 255, .26);',
-		'  border-bottom-color: rgba(255, 255, 255, .26);',
-		'}',
-		// Light theme needs the opposite: a surface darker than the panel, or the
-		// card vanishes the way the old panels did on a light background. .07 was
-		// too little there - the panel is already near-white, so the card only
-		// reached 1.17:1. .12 brings it in line with the dark theme's 1.56.
-		'html:not([data-darkmode="true"]) .rrws-card {',
-		'  background: rgba(0, 0, 0, .12);',
-		'  border-top-color: rgba(0, 0, 0, .3);',
-		'  border-right-color: rgba(0, 0, 0, .3);',
-		'  border-bottom-color: rgba(0, 0, 0, .3);',
+		'  background: var(--background-color-low, rgba(255,255,255,.06));',
 		'}',
 		'.rrws-card-best { border-left-color: #16a34a; }',
 		'.rrws-card-torn { border-left-color: #b91c1c; opacity: .65; }',
-		// The metadata line needs to stay legible on both surfaces, so it gets a
-		// theme-aware colour instead of the fixed #aaa that assumed dark.
+		// The metadata line follows the theme so it stays legible on whatever
+		// surface the card got, instead of the fixed #aaa that assumed dark.
 		'.rrws-card-meta { font-size: 12px; margin-top: 3px; color: var(--text-color-medium, #666); }',
-		'html[data-darkmode="true"] .rrws-card-meta { color: #b4b4b4; }',
 	].join('\n');
 
 	var el = document.createElement('style');
