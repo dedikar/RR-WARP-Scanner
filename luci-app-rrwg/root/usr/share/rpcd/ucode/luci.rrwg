@@ -783,13 +783,41 @@ function scan_result() {
 		return { endpoints: [], updated: 0, saved: false };
 	let st = null;
 	try { st = stat(src); } catch (e) {}
+
+	let eps = d.endpoints ?? [];
+
+	// "Показывать только стабильные" was stored but never applied: the engine
+	// has no flag for it, so torn endpoints with heavy loss still reached the
+	// page. The filter belongs here - the result is already JSON by this point.
+	const s = get_settings();
+	if (s.stable_only) {
+		const keep = [];
+		for (let i = 0; i < length(eps); i++) {
+			const e = eps[i];
+			if (e.torn) continue;
+			if (to_int(e.loss_pct, 0) > 0) continue;
+			push(keep, e);
+		}
+		eps = keep;
+	}
+
+	let working = 0, tg = 0;
+	for (let i = 0; i < length(eps); i++) {
+		working++;
+		if (eps[i].tg_ok) tg++;
+	}
+
 	return {
-		endpoints: d.endpoints ?? [],
-		working: d.working ?? 0,
+		endpoints: eps,
+		working: working,
 		probed: d.probed ?? 0,
-		tg_working: d.tg_working ?? 0,
+		tg_working: tg,
 		tg_total: d.tg_total ?? 5,
 		error_text: d.error ?? '',
+		// Reported so the page can say "N hidden" instead of quietly showing
+		// fewer rows than the scan found.
+		hidden: length(d.endpoints ?? []) - length(eps),
+		stable_only: s.stable_only ? 1 : 0,
 		updated: st ? st.mtime : 0,
 		saved: !hasFresh,
 	};

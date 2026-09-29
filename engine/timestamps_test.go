@@ -19,6 +19,10 @@ func TestPosixFixedZoneMatchesRouterTZ(t *testing.T) {
 		{"CET-1", 1 * 3600},    // local = UTC+1
 		{"EST5", -5 * 3600},    // west of Greenwich
 		{"MSK-3MSD", 3 * 3600}, // DST suffix: the base offset still applies
+		// A quoted name carries digits and signs of its own; OpenWrt writes this
+		// form for zones without an abbreviation, e.g. Asia/Yekaterinburg.
+		{"<+05>-5", 5 * 3600},
+		{"<-03>3", -3 * 3600},
 	}
 	for _, c := range cases {
 		loc := posixFixedZone(c.spec)

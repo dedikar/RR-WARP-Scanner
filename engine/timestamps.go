@@ -44,17 +44,28 @@ func routerLocation() *time.Location {
 }
 
 // posixFixedZone parses the fixed-offset subset of POSIX TZ strings that
-// OpenWrt writes, e.g. "MSK-3" (UTC+3) or "UTC0".
+// OpenWrt writes, e.g. "MSK-3" (UTC+3), "<+05>-5" (UTC+5) or "UTC0".
 //
 // POSIX puts the sign the opposite way from what it reads as: the number is what
 // you add to local time to reach UTC, so "MSK-3" means local = UTC+3.
 // FixedZone wants an east-positive offset, so the parsed value is used as-is
-// after "-" and negated after "+". Getting this backwards put the engine six
-// hours away from the backend rather than aligned with it.
+// after "-" and negated after "+". Getting this backwards put the engine hours
+// away from the backend rather than aligned with it.
 func posixFixedZone(spec string) *time.Location {
+	// A quoted name ("<+05>") may contain digits and signs of its own, so it is
+	// skipped whole; scanning for the first digit would otherwise read the "+05"
+	// inside the name as the offset.
 	i := 0
-	for i < len(spec) && (spec[i] < '0' || spec[i] > '9') && spec[i] != '+' && spec[i] != '-' {
-		i++
+	if strings.HasPrefix(spec, "<") {
+		end := strings.Index(spec, ">")
+		if end < 0 {
+			return nil
+		}
+		i = end + 1
+	} else {
+		for i < len(spec) && (spec[i] < '0' || spec[i] > '9') && spec[i] != '+' && spec[i] != '-' {
+			i++
+		}
 	}
 	name, rest := spec[:i], spec[i:]
 	if rest == "" {
