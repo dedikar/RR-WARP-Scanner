@@ -596,7 +596,7 @@ return view.extend({
 
 		var tgChk = E('input', { type: 'checkbox', name: 'tg' });
 		if (s.tg) tgChk.checked = true;
-		sec.appendChild(f('', chkLabel(tgChk, ' Проверять Telegram (MTProto по всем 5 ДЦ) — рекомендую')));
+		sec.appendChild(f('', chkLabel(tgChk, ' Проверять Telegram (MTProto по всем 5 ДЦ)')));
 
 		var tpChk = E('input', { type: 'checkbox', name: 'tun_ping' });
 		if (s.tun_ping) tpChk.checked = true;

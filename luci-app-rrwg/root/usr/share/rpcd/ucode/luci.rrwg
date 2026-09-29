@@ -132,7 +132,7 @@ const DEFAULTS = {
 	hosts: 500,
 	timeout: 3,
 	jobs: 64,
-	sample: 0,
+	sample: 100,
 	proto: 'awg',
 	tg: 1,
 	tun_ping: 1,
