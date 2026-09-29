@@ -191,11 +191,11 @@ ENGINE_WORKS=no
 if [ -x /usr/bin/rrwg ]; then
 	/usr/bin/rrwg version >/dev/null 2>&1 && ENGINE_WORKS=yes
 fi
-logger -t rrwg "установлен: архитектура роутера ${ARCH_LOCAL:-неизвестна}, движок работает: $ENGINE_WORKS"
+logger -t rrwg "installed: router arch ${ARCH_LOCAL:-unknown}, engine runs: $ENGINE_WORKS"
 if [ "$ENGINE_WORKS" != yes ]; then
-	logger -t rrwg "ВНИМАНИЕ: движок не запускается на этой архитектуре; пакет собран под aarch64_cortex-a53"
-	logger -t rrwg "  проверка вручную: /usr/bin/rrwg version"
-	logger -t rrwg "  свободно на /overlay: $(df -h /overlay 2>/dev/null | tail -1)"
+	logger -t rrwg "WARNING: engine does not run on this architecture; package built for aarch64_cortex-a53"
+	logger -t rrwg "  check manually: /usr/bin/rrwg version"
+	logger -t rrwg "  free on /overlay: $(df -h /overlay 2>/dev/null | tail -1)"
 fi
 exit 0
 EOF

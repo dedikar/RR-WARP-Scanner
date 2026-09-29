@@ -576,7 +576,7 @@ return view.extend({
 		// --- core params --------------------------------------------------
 		sec.appendChild(f('Хостов на подсеть', num('sample', s.sample, 1, 256, 90, 'адресов на каждую подсеть, 1–256; всего подсетей 14')));
 		sec.appendChild(f('Таймаут (сек)', num('timeout', s.timeout, 1, 30, 70, 'ожидание handshake, 1–30')));
-		sec.appendChild(f('Потоков', num('jobs', s.jobs, 1, 64, 70, 'параллельных туннелей, 1–64 (замерено: оптимум ~64)')));
+		sec.appendChild(f('Потоков', num('jobs', s.jobs, 1, 64, 70, 'параллельных туннелей, 1–64')));
 
 		var protoSel = E('select', { name: 'proto' });
 		[['awg', 'AmneziaWG (обфусцированный, рекомендуется)'],
@@ -672,30 +672,38 @@ return view.extend({
 		if (s.ipv6) ipv6Chk.checked = true;
 		advBody.appendChild(f('', chkLabel(ipv6Chk, ' Использовать IPv6-пул')));
 
-		var spChk = E('input', { type: 'checkbox', name: 'speed' });
-		if (s.speed) spChk.checked = true;
-		advBody.appendChild(f('', chkLabel(spChk, ' Добавить замер скорости (медленно)')));
-
 		adv.appendChild(advBody);
 		sec.appendChild(adv);
 
 		// --- speed test section -------------------------------------------
-		// A section of its own rather than a buried checkbox: the phase downloads
+		// The switch and the endpoint count belong together: the phase downloads
 		// through each endpoint one at a time, so how many get measured is what
-		// tells the user how long the run will take.
+		// tells the user how long the run will take. The checkbox used to live in
+		// "Дополнительно", far from the field it controls.
 		var spSection = E('div', { 'class': 'cbi-section', style: 'margin:14px 0; border:1px solid #555; border-radius:4px; padding:10px 12px' });
 		spSection.appendChild(E('h3', {}, 'Тест скорости'));
 		spSection.appendChild(E('p', { 'class': 'text-muted', style: 'margin:2px 0 8px 0' },
 			'Замер download внутри туннеля, по одному эндпоинту за раз. Идёт после обычного скана ' +
-			'и не меняет порядок результатов.'));
+			'и не меняет порядок результатов. Медленно.'));
+
+		var spChk = E('input', { type: 'checkbox', name: 'speed' });
+		if (s.speed) spChk.checked = true;
+		spSection.appendChild(E('div', { style: 'margin-bottom:10px' },
+			chkLabel(spChk, 'Включить замер скорости')));
 
 		var spTopRow = num('speed_top', s.speed_top == null ? 5 : s.speed_top, 1, 40, 70,
 			'эндпоинтов из начала списка, 1–40');
 		spSection.appendChild(f('Эндпоинтов', spTopRow));
 
-		// The phase only runs when the checkbox above is ticked, so the field is
-		// dimmed while it is off instead of looking active on its own.
-		var syncSpeedUI = function() { spTopRow.style.opacity = spChk.checked ? '1' : '.5'; };
+		// Dimming alone was not enough: the field stayed editable and the value
+		// was still saved, so the setting looked active after switching the run
+		// off. Disable the input itself so it cannot be changed while the phase
+		// is off.
+		var syncSpeedUI = function() {
+			spTopRow.style.opacity = spChk.checked ? '1' : '.5';
+			var inp = spTopRow.querySelector('input');
+			if (inp) inp.disabled = !spChk.checked;
+		};
 		spChk.addEventListener('change', syncSpeedUI);
 		syncSpeedUI();
 		sec.appendChild(spSection);

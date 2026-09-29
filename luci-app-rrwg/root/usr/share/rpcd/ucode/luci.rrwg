@@ -131,7 +131,7 @@ const SAMPLE_MAX = 256;
 const DEFAULTS = {
 	hosts: 500,
 	timeout: 3,
-	jobs: 8,
+	jobs: 64,
 	sample: 0,
 	proto: 'awg',
 	tg: 1,
@@ -139,7 +139,9 @@ const DEFAULTS = {
 	stable_only: 1,
 	port: 0,
 	exclude: [],
-	exclude_nodes: [],
+	// DME (Moscow) is DPI-filtered on RU provider networks and is the node
+	// people exclude most often, so it starts excluded.
+	exclude_nodes: ['DME'],
 	include_nodes: [],
 	include_countries: [],
 	exclude_countries: [],
@@ -223,27 +225,43 @@ function engine_runs() {
 // unusable. Deliberately verbose: on a foreign router this block is the whole
 // diagnosis, and it is far cheaper than a round trip asking for more detail.
 function log_env(reason) {
-	syslog('СБОЙ: ' + reason);
-	syslog('  архитектура роутера: ' + command('cat /etc/openwrt_release 2>/dev/null | grep DISTRIB_ARCH | cut -d= -f2') +
+	syslog('FAILURE: ' + reason);
+	syslog('  router arch: ' + command("sed -n \"s/^DISTRIB_ARCH='\\(.*\\)'/\\1/p\" /etc/openwrt_release 2>/dev/null") +
 		' / ' + command('opkg print-architecture 2>/dev/null | tail -1'));
-	syslog('  пакет собран под: ' + ENGINE_ARCH);
-	syslog('  движок ' + BIN + ': ' + (file_exists(BIN) ? 'есть' : 'ОТСУТСТВУЕТ'));
+	syslog('  package built for: ' + ENGINE_ARCH);
+	syslog('  engine ' + BIN + ': ' + (file_exists(BIN) ? 'present' : 'MISSING'));
 	if (file_exists(BIN)) {
-		syslog('  движок version -> ' + command(BIN + ' version 2>&1 | head -1'));
-		syslog('  права: ' + command('ls -l ' + BIN + ' 2>&1'));
+		syslog('  engine version -> ' + command(BIN + ' version 2>&1 | head -1'));
+		syslog('  permissions: ' + command('ls -l ' + BIN + ' 2>&1'));
 		syslog('  ELF: ' + command('head -c 20 ' + BIN + ' 2>/dev/null | od -c | head -1'));
 	}
-	syslog('  бэкенд: ' + BIN_DIR_UCODE + (file_exists(BIN_DIR_UCODE) ? ' есть' : ' ОТСУТСТВУЕТ'));
-	syslog('  аккаунт: ' + ACCOUNT + (file_exists(ACCOUNT) ? ' есть' : ' отсутствует (нужна регистрация)'));
-	syslog('  свободно на /overlay: ' + command('df -h /overlay 2>/dev/null | tail -1'));
-	syslog('  свободно в /tmp: ' + command('df -h /tmp 2>/dev/null | tail -1'));
+	syslog('  backend: ' + BIN_DIR_UCODE + (file_exists(BIN_DIR_UCODE) ? ' present' : ' MISSING'));
+	syslog('  account: ' + ACCOUNT + (file_exists(ACCOUNT) ? ' present' : ' absent (registration needed)'));
+	syslog('  free on /overlay: ' + command('df -h /overlay 2>/dev/null | tail -1'));
+	syslog('  free in /tmp: ' + command('df -h /tmp 2>/dev/null | tail -1'));
+}
+
+// localtime() in this ucode build returns a struct that stringifies as a JSON
+// blob (sec/min/hour/mday/mon/year/wday/yday/isdst), which made every log line
+// hard to read. A plain "YYYY-MM-DD HH:MM:SS" comes from the shell instead, and
+// the result is cached per second: one action writes several lines that should
+// share a timestamp.
+let __ts_cache = null;
+let __ts_at = -1;
+function stamp() {
+	const now = time();
+	if (__ts_cache != null && now == __ts_at) return __ts_cache;
+	const s = command('date "+%Y-%m-%d %H:%M:%S"');
+	__ts_cache = length(s) ? s : '' + now;
+	__ts_at = now;
+	return __ts_cache;
 }
 
 function rpclog(method, detail) {
 	try {
 		let prev = read_file(RPC_LOG) ?? '';
 		if (length(prev) > 32768) prev = substr(prev, length(prev) - 16384);
-		writefile(RPC_LOG, prev + '[' + localtime() + '] ' + method + ' ' + (detail ?? '') + '\n');
+		writefile(RPC_LOG, prev + stamp() + '  ' + method + '  ' + (detail ?? '') + '\n');
 	} catch (e) {}
 }
 
@@ -603,12 +621,12 @@ function scan_start(req) {
 	// the UI waited for a scan that would never produce anything.
 	if (!file_exists(BIN)) {
 		log_env('движок отсутствует: ' + BIN);
-		return { error: 'движок не найден: ' + BIN + ' — пакет повреждён. Подробности: logread | grep rrwg' };
+		return { error: 'engine missing: ' + BIN + ' - package damaged. Details: logread | grep rrwg' };
 	}
 	if (!engine_runs()) {
 		log_env('движок не запускается (' + BIN + ' version не отвечает)');
-		return { error: 'движок не запускается — вероятно, пакет не подходит этой архитектуре (' +
-			'собран под ' + ENGINE_ARCH + '). Подробности: logread | grep rrwg' };
+		return { error: 'engine will not run - the package is likely built for a different architecture (' +
+			ENGINE_ARCH + '). Details: logread | grep rrwg' };
 	}
 
 	// Persist what the run used so the form and the result always agree.
@@ -664,32 +682,30 @@ function scan_start(req) {
 	const startedPid = trim(read_file(PIDFILE) ?? '');
 	const alive = length(startedPid) > 0 && file_exists('/proc/' + startedPid);
 
-	// One line that answers the questions the old log did not: what was scanned,
-	// with what limits, where the output went. targets shows the exact pools the
-	// run covers, which is what makes "why did it scan that subnet" answerable.
-	const targetDesc = targets_from_excludes(s.exclude) ?? 'весь пул (14 подсетей)';
-	rpclog('scanStart',
-		'proto=' + s.proto +
-		' perSubnet=' + per_subnet_sample(s.sample, s.exclude) +
-		' total~' + s.sample +
-		' jobs=' + s.jobs +
-		' timeout=' + s.timeout +
-		' tg=' + (s.tg ? 'on' : 'off') +
-		' tunPing=' + (s.tun_ping ? 'on' : 'off') +
-		' speed=' + (s.speed ? ('top' + s.speed_top) : 'off') +
-		' port=' + (s.port > 0 ? s.port : 'auto') +
-		' targets=' + targetDesc);
-	rpclog('scanStart', 'pid=' + (length(startedPid) ? startedPid : '?') +
-		' alive=' + alive +
-		' out=' + RESULT + ' log=' + LOG);
+	// Readable lines instead of key=value: this log exists to be read by a person
+	// diagnosing a scan, not to be parsed.
+	const targetDesc = targets_from_excludes(s.exclude);
+	const perSub = per_subnet_sample(s.sample, s.exclude);
+	const subnetCount = targetDesc ? length(split(targetDesc, ',')) : 14;
+	rpclog('scan start', s.proto + ', ' + perSub + ' host(s) per subnet, up to ' +
+		(perSub * subnetCount) + ' hosts total');
+	rpclog('  targets', targetDesc ? ('subnets: ' + targetDesc) : 'full pool (14 subnets)');
+	rpclog('  options', 'jobs ' + s.jobs + ', timeout ' + s.timeout + 's, port ' +
+		(s.port > 0 ? s.port : 'auto') +
+		', telegram ' + (s.tg ? 'on' : 'off') +
+		', tun-ping ' + (s.tun_ping ? 'on' : 'off') +
+		', speed ' + (s.speed ? ('on, first ' + s.speed_top) : 'off'));
+	rpclog('  process', 'pid ' + (length(startedPid) ? startedPid : 'none') +
+		', state ' + (alive ? 'running' : 'FAILED TO START'));
+	rpclog('  files', 'result ' + RESULT + ', engine log ' + LOG);
 
 	// Report the truth: if the process did not come up within the bounded wait,
 	// say so here rather than letting the page poll a scan that never started.
 	if (!alive) {
 		const tail = read_file(LOG) ?? '';
-		syslog('scanStart: движок не поднялся за 2с (pid=' + (length(startedPid) ? startedPid : 'нет') +
+		syslog('scanStart: engine did not come up within 2s (pid=' + (length(startedPid) ? startedPid : 'none') +
 			'), вывод: ' + substr(tail, 0, 200));
-		return { error: 'движок не запустился — проверьте logread | grep rrwg' };
+		return { error: 'engine did not start - check logread | grep rrwg' };
 	}
 	return { started: true };
 }
