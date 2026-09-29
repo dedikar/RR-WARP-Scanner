@@ -749,6 +749,27 @@ function scan_status() {
 	// The engine writes "done" but the file stays; trust the process instead.
 	if (!running && phase != 'done' && phase != 'idle') phase = (phase == 'starting' ? 'idle' : 'done');
 
+	// Persist the finished run here, on the poll that first sees it complete.
+	//
+	// This used to happen only at the start of the NEXT scan, where the previous
+	// result was copied to /etc before being overwritten - so /etc/rrws-last-result
+	// existed only for someone who had run a scan twice. Measured on the router:
+	// one scan, then a reboot, and 603 endpoints were gone along with /tmp, while
+	// keep.d meanwhile listed the file as sysupgrade-safe. Saving on completion
+	// makes the file mean what keep.d already claimed it meant.
+	if (phase == 'done' && !running) {
+		const cur = read_file(RESULT);
+		if (cur != null && length(cur)) {
+			let stamp = stat(RESULT);
+			// Rewrite only when the fresh result is newer than the saved copy, so
+			// repeated polling does not keep touching the flash for nothing.
+			let prev = null;
+			try { prev = stat(RESULT_SAVED); } catch (e) {}
+			if (!prev || !stamp || stamp.mtime > prev.mtime)
+				writefile(RESULT_SAVED, cur);
+		}
+	}
+
 	let percent = 0;
 	if (phase == 'done') percent = 100;
 	else if (total > 0) percent = int(done * 100 / total);
