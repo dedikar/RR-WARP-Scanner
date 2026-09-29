@@ -545,20 +545,6 @@ function scan_running() {
 	return file_exists('/proc/' + pid);
 }
 
-
-// Translate a total host count into the engine's per-subnet -n. Rounded UP so a
-// small request never collapses to zero, and floored at 1 so a scan always
-// covers at least one address per subnet it touches.
-function per_subnet_sample(total, exclude) {
-	const n = to_int(total, 0);
-	if (n <= 0) return 1;
-	let count = length(SUBNETS);
-	const targets = targets_from_excludes(exclude);
-	if (targets != null) count = length(split(targets, ','));
-	const per = int((n + count - 1) / count);
-	return per < 1 ? 1 : per;
-}
-
 function build_scan_args(s) {
 	let args = [];
 	// account + output contract
@@ -570,11 +556,13 @@ function build_scan_args(s) {
 	push(args, '-p', s.proto);
 	if (s.tun_ping) push(args, '-P');
 	if (s.tg) push(args, '--tg');
-	// The UI asks for a TOTAL host count; the engine's -n is addresses PER
-	// SUBNET and multiplies by the pool count. Passing the UI number straight
-	// through turned "12 hosts" into 168 probes and a multi-minute scan.
+	// The field is labelled "Хостов на подсеть" and the engine's -n is addresses
+	// PER SUBNET, so the value passes straight through. An earlier version
+	// divided it by the subnet count, treating it as a total: entering 100 then
+	// scanned 7 per subnet, and the found-endpoint count barely moved no matter
+	// what the user typed.
 	if (s.full) push(args, '-f');
-	else push(args, '-n', '' + per_subnet_sample(s.sample, s.exclude));
+	else push(args, '-n', '' + max(1, to_int(s.sample, DEFAULTS.sample)));
 	push(args, '-t', '' + s.timeout);
 	push(args, '-jt', '' + s.jobs);
 	if (s.port) push(args, '--port', '' + s.port);
@@ -685,10 +673,13 @@ function scan_start(req) {
 	// Readable lines instead of key=value: this log exists to be read by a person
 	// diagnosing a scan, not to be parsed.
 	const targetDesc = targets_from_excludes(s.exclude);
-	const perSub = per_subnet_sample(s.sample, s.exclude);
 	const subnetCount = targetDesc ? length(split(targetDesc, ',')) : 14;
-	rpclog('scan start', s.proto + ', ' + perSub + ' host(s) per subnet, up to ' +
-		(perSub * subnetCount) + ' hosts total');
+	// Log what the engine is actually told: "full" means every address, otherwise
+	// the per-subnet sample times the number of subnets in play.
+	const perSub = s.full ? 254 : max(1, to_int(s.sample, DEFAULTS.sample));
+	rpclog('scan start', s.proto + ', ' +
+		(s.full ? 'all 254 addresses per subnet' : perSub + ' host(s) per subnet') +
+		', up to ' + (perSub * subnetCount) + ' hosts total');
 	rpclog('  targets', targetDesc ? ('subnets: ' + targetDesc) : 'full pool (14 subnets)');
 	rpclog('  options', 'jobs ' + s.jobs + ', timeout ' + s.timeout + 's, port ' +
 		(s.port > 0 ? s.port : 'auto') +

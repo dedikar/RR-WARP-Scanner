@@ -106,6 +106,85 @@ var TG_TOTAL = 5;
 
 // ---------------------------------------------------------------- helpers ---
 
+// ------------------------------------------------------------- theming ---
+
+// Panel styling for the whole page, injected once.
+//
+// The borders were hardcoded (#555 on #1a1a1a) and only looked right in the
+// dark theme; on a light background the panels disappeared. These rules use the
+// theme's own CSS variables with fallbacks, so the same markup works either way.
+// Applied by class rather than inline styles so every section stays consistent
+// and one edit changes all of them.
+//
+// LuCI themes do not style .cbi-section with a visible border, which is why the
+// account and scan blocks looked like bare text while the filter blocks had
+// frames - the frames were mine, added ad hoc. Now every block uses .rrwg-panel.
+var pageCssInjected = false;
+function injectPageCss() {
+	if (pageCssInjected) return;
+	pageCssInjected = true;
+	var css = [
+		'.rrwg-panel {',
+		'  border: 1px solid var(--border-color-high, #c9c9c9);',
+		'  box-shadow: 0 0 0 1px rgba(127, 127, 127, .12);',
+		'  border-radius: 6px;',
+		'  padding: 12px 14px;',
+		'  margin: 14px 0;',
+		'  background: var(--background-color-medium, transparent);',
+		'}',
+		'.rrwg-panel > h3:first-child {',
+		'  margin-top: 0;',
+		'  padding-bottom: 6px;',
+		'  border-bottom: 1px solid var(--border-color-low, #e4e4e4);',
+		'}',
+		// The log pane and the checkbox lists sit inside a panel and need the
+		// same treatment as the panel border, not the old fixed colours.
+		'.rrwg-panel pre {',
+		'  background: var(--background-color-low, #f7f7f7);',
+		'  border: 1px solid var(--border-color-low, #e4e4e4);',
+		'}',
+		'html[data-darkmode="true"] .rrwg-panel pre { background: #111; }',
+		'.rrwg-checklist {',
+		'  border: 1px solid var(--border-color-high, #c9c9c9);',
+		'  border-radius: 4px;',
+		'}',
+		// A clickable disclosure needs to look clickable: the log summary was
+		// plain text and read as an empty area.
+		'.rrwg-disclosure > summary {',
+		'  cursor: pointer;',
+		'  padding: 6px 10px;',
+		'  font-weight: 600;',
+		'  border: 1px solid var(--border-color-high, #c9c9c9);',
+		'  border-radius: 6px;',
+		'  background: var(--background-color-low, transparent);',
+		'  list-style: none;',
+		'  display: flex;',
+		'  align-items: center;',
+		'  gap: 8px;',
+		'}',
+		'.rrwg-disclosure > summary::-webkit-details-marker { display: none; }',
+		// Triangle drawn from a border so it does not depend on a font glyph
+		// being present on the router's browser.
+		'.rrwg-disclosure > summary::before {',
+		'  content: "";',
+		'  width: 0; height: 0;',
+		'  border-left: 6px solid currentColor;',
+		'  border-top: 5px solid transparent;',
+		'  border-bottom: 5px solid transparent;',
+		'  transition: transform .15s;',
+		'}',
+		'.rrwg-disclosure[open] > summary::before { transform: rotate(90deg); }',
+		'.rrwg-disclosure[open] > summary { margin-bottom: 8px; }',
+		'.rrwg-disclosure[open] > summary { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }',
+	].join('\n');
+
+	var el = document.createElement('style');
+	el.type = 'text/css';
+	el.appendChild(document.createTextNode(css));
+	document.head.appendChild(el);
+}
+
+
 var confData = null;
 var versionText = '?';
 
@@ -131,7 +210,7 @@ function mkCheckList(selected, choices, placeholder) {
 	for (var i = 0; i < (selected || []).length; i++)
 		sel[String(selected[i]).toUpperCase()] = true;
 
-	var box = E('div', { class: 'rrwg-checklist', style: 'border:1px solid #555;border-radius:4px;background:#1a1a1a' });
+	var box = E('div', { class: 'rrwg-checklist' });
 	var summary = E('div', {
 		style: 'padding:6px 10px;cursor:pointer;user-select:none;color:#8cf'
 	});
@@ -296,6 +375,8 @@ return view.extend({
 		var cs = data[3] || {};
 		var self = this;
 
+		injectPageCss();
+
 		confData = data[2] || {};
 		versionText = cs.version || '?';
 
@@ -409,7 +490,7 @@ return view.extend({
 		// flex:1 so the block fills the row next to the vendor banner (which is
 		// hidden on supported hardware, leaving this full width). min-width:0
 		// stops long keys from forcing the row wider than the viewport.
-		var sec = E('div', { 'class': 'cbi-section', style: 'flex:1 1 auto;min-width:0' });
+		var sec = E('div', { 'class': 'cbi-section rrwg-panel', style: 'flex:1 1 auto;min-width:0' });
 		sec.appendChild(E('h3', {}, 'Аккаунт WARP'));
 
 		if (acct.registered) {
@@ -511,7 +592,7 @@ return view.extend({
 
 	renderScan: function(s, res0) {
 		var self = this;
-		var sec = E('div', { 'class': 'cbi-section' });
+		var sec = E('div', { 'class': 'cbi-section rrwg-panel' });
 		sec.appendChild(E('h3', {}, 'Сканирование эндпоинтов'));
 
 		var f = function(label, node) {
@@ -618,7 +699,7 @@ return view.extend({
 		};
 
 		var addSection = function(title, hint, selected, choices, placeholder, items, key) {
-			var wrap = E('div', { class: 'cbi-section', style: 'margin:14px 0; border:1px solid #555; border-radius:4px; padding:10px 12px' });
+			var wrap = E('div', { class: 'cbi-section rrwg-panel' });
 			wrap.appendChild(E('h3', {}, title));
 			wrap.appendChild(E('p', { class: 'text-muted', style: 'margin:2px 0 8px 0' }, hint));
 			var dd = mkCheckList(selected, choices, placeholder);
@@ -643,9 +724,9 @@ return view.extend({
 			s.include_nodes || [], mkChoices(s.nodes || []), 'Только узлы...', 4, 'includeNodes');
 
 		// --- advanced: obfuscation ---------------------------------------
-		var adv = E('details', { style: 'margin:12px 0' });
-		adv.appendChild(E('summary', { style: 'cursor:pointer;color:#8cf' }, 'Дополнительно: обфускация, порт, IPv6, полный перебор'));
-		var advBody = E('div', { style: 'padding:10px 0 0 12px' });
+		var adv = E('div', { 'class': 'cbi-section rrwg-panel' });
+		adv.appendChild(E('h3', {}, 'Дополнительно: обфускация, порт, IPv6, полный перебор'));
+		var advBody = E('div', {});
 
 		// Three inputs in one row, appended one by one: E('span', {}, a, b, c)
 		// keeps only `a`.
@@ -687,7 +768,7 @@ return view.extend({
 		// through each endpoint one at a time, so how many get measured is what
 		// tells the user how long the run will take. The checkbox used to live in
 		// "Дополнительно", far from the field it controls.
-		var spSection = E('div', { 'class': 'cbi-section', style: 'margin:14px 0; border:1px solid #555; border-radius:4px; padding:10px 12px' });
+		var spSection = E('div', { 'class': 'cbi-section rrwg-panel' });
 		spSection.appendChild(E('h3', {}, 'Тест скорости'));
 		spSection.appendChild(E('p', { 'class': 'text-muted', style: 'margin:2px 0 8px 0' },
 			'Замер download внутри туннеля, по одному эндпоинту за раз. Идёт после обычного скана ' +
@@ -1060,9 +1141,9 @@ return view.extend({
 
 	renderLog: function() {
 		var self = this;
-		var sec = E('div', { 'class': 'cbi-section' });
-		var det = E('details');
-		det.appendChild(E('summary', { style: 'cursor:pointer' }, 'Логи'));
+		var sec = E('div', { 'class': 'cbi-section rrwg-panel' });
+		var det = E('details', { 'class': 'rrwg-disclosure' });
+		det.appendChild(E('summary', {}, 'Логи'));
 
 		// One merged log, in chronological order, like a chat: the backend
 		// interleaves engine and rpcd lines by their timestamps, so the page
@@ -1072,8 +1153,7 @@ return view.extend({
 		// characters and keeps the order intact.
 		var logWrap = E('div', { style: 'margin-top:8px' });
 		var pre = E('pre', {
-			style: 'height:320px;overflow:auto;font-size:11px;white-space:pre-wrap;' +
-				'background:#111;padding:8px;margin:0;border:1px solid #333;border-radius:3px'
+			style: 'height:320px;overflow:auto;font-size:11px;white-space:pre-wrap;padding:8px;margin:0;border-radius:3px'
 		}, '...');
 		logWrap.appendChild(pre);
 		det.appendChild(logWrap);
