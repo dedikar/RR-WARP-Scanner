@@ -296,7 +296,12 @@ function account_status() {
 	if (!a || !a.id)
 		return { registered: false, registering: register_running() };
 	let id = a.id;
-	let addr = a.address;
+	// The engine writes "ipv4", but an account minted by the older build carries
+	// "address". Reading only the old name left this empty for every account
+	// registered since, and conf_base() masked it by falling back to uci and then
+	// to a hard-coded 172.16.0.2/32 - so .conf happened to be right while the
+	// value the UI displayed was wrong.
+	let addr = a.ipv4 != null ? a.ipv4 : a.address;
 	let priv = a.private_key;
 	let peer = a.peer_public_key;
 	return {
@@ -344,6 +349,11 @@ function uci_get(sel) {
 
 // Values the UI needs to build a client .conf for a found endpoint. The engine's
 // account is the source of truth so a pasted config pairs with THIS account.
+//
+// The fallback chain is kept (uci, then the well-known Cloudflare address) but it
+// is no longer load-bearing: it used to cover for account_status() reading a
+// field name the engine no longer writes, which meant a .conf carried the right
+// address by luck and a wrong one the moment Cloudflare handed out something else.
 function conf_base() {
 	const a = account_status();
 	const I1_DEFAULT = '<r 2><b 0x858000010001000000000669636c6f756403636f6d0000010001c00c000100010000105a00044d583737>';
@@ -821,7 +831,14 @@ function scan_result() {
 //
 // Lines without a timestamp - a stray panic, or output from an older engine -
 // keep their place instead of being dropped.
-function merge_logs(engineText, rpcText) {
+//
+// Takes any number of { text, tag } sources so registration output can join the
+// same stream. It used to take exactly two positional strings, and the
+// registration log was left out entirely: registration runs a different engine
+// subcommand, writes to its own file, and takes up to three minutes, during
+// which the page showed a bare "Регистрация... (46 с)" with no way to see why it
+// was slow or where it failed.
+function merge_logs(sources) {
 	const rows = [];
 
 	// The engine already prefixes its own lines with the "engine" tag (see
@@ -845,8 +862,8 @@ function merge_logs(engineText, rpcText) {
 		}
 	};
 
-	collect(engineText, 'engine');
-	collect(rpcText, 'rpcd');
+	for (let i = 0; i < length(sources); i++)
+		collect(sources[i].text, sources[i].tag);
 
 	// Insertion sort by timestamp; untimed entries stay where they are. ucode on
 	// this build has no global sort(), and the streams are a few hundred lines.
@@ -873,13 +890,33 @@ function merge_logs(engineText, rpcText) {
 function scan_log() {
 	const engine = read_file(LOG) ?? '';
 	const rpc = read_file(RPC_LOG) ?? '';
-	return { merged: merge_logs(engine, rpc) };
+	// Registration output joins the same stream: it is the same engine talking,
+	// just a different subcommand, and it has to be readable in one place with
+	// everything else.
+	const reg = read_file(REG_LOG) ?? '';
+	return { merged: merge_logs([
+		{ text: engine, tag: 'engine' },
+		{ text: reg, tag: 'engine' },
+		{ text: rpc, tag: 'rpcd' },
+	]) };
 }
 
 function scan_log_clear() {
 	try { writefile(LOG, ''); } catch (e) {}
 	try { writefile(RPC_LOG, ''); } catch (e) {}
+	try { writefile(REG_LOG, ''); } catch (e) {}
 	return { cleared: true };
+}
+
+// What the running (or last) registration said. The page polls this while the
+// account is being minted so the wait has a visible reason instead of a bare
+// seconds counter, and reads it on failure to show why.
+function register_log() {
+	const raw = read_file(REG_LOG) ?? '';
+	// The tail is what matters: the last lines carry the cause of a failure.
+	const MAX = 4000;
+	const text = length(raw) > MAX ? substr(raw, length(raw) - MAX) : raw;
+	return { log: text, running: register_running() };
 }
 
 // ------------------------------------------------------------ registration --
@@ -948,10 +985,7 @@ const methods = {
 		call: function() { return device_check(); }
 	},
 	registerLog: {
-		call: function() {
-			const l = read_file(REG_LOG) ?? '';
-			return { log: length(l) > 4000 ? substr(l, length(l) - 4000) : l };
-		}
+		call: function() { return register_log(); }
 	},
 	confBase: {
 		call: function() { return conf_base(); }

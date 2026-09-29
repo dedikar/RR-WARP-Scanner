@@ -590,6 +590,10 @@ return view.extend({
 		regBtn.addEventListener('click', function() {
 			regBtn.disabled = true;
 			regBtn.textContent = 'Регистрация...';
+			// Clear the previous run's pane before the backend truncates its log,
+			// so a stale failure from an earlier attempt is not read as this one.
+			self.setRegLog('');
+			if (self.regStatusEl) self.regStatusEl.textContent = 'Регистрация...';
 			var p = acct.registered ? callRenewAccount() : callRegister();
 			p.then(function(r) {
 				if (r && r.error) {
@@ -621,16 +625,66 @@ return view.extend({
 		var regStatus = E('div', { style: 'margin-top:8px;color:var(--text-color-medium, #888)' });
 		sec.appendChild(regStatus);
 		this.regStatusEl = regStatus;
+
+		// Registration takes up to three minutes and walks a chain: direct API,
+		// then a relay, then a WARP tunnel with awg and wg attempts. Without this
+		// pane the user watched a seconds counter and, on failure, got nothing but
+		// "did not finish" - no way to tell a blocked API from a dead tunnel.
+		var regLogWrap = E('div', { style: 'margin-top:8px;display:none' });
+		var regLogHead = E('div', { style: 'font-size:12px;color:var(--text-color-medium, #888);margin-bottom:4px' },
+			'Ход регистрации:');
+		var regLogPre = E('pre', {
+			style: 'white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto;' +
+				'font-size:11px;line-height:1.45;margin:0;padding:8px 10px'
+		}, '');
+		regLogWrap.appendChild(regLogHead);
+		regLogWrap.appendChild(regLogPre);
+		sec.appendChild(regLogWrap);
+		this.regLogWrap = regLogWrap;
+		this.regLogPre = regLogPre;
 		return sec;
+	},
+
+	// Show the registration pane and keep it filled from the backend. Called on
+	// start (so the wait has a reason) and on failure (so it has a cause).
+	setRegLog: function(text) {
+		if (!this.regLogWrap) return;
+		if (text == null || !text.length) {
+			this.regLogWrap.style.display = 'none';
+			return;
+		}
+		this.regLogWrap.style.display = '';
+		if (this.regLogPre) this.regLogPre.textContent = text;
+	},
+
+	// Fetch and display the current registration log. Returns the text so the
+	// caller can decide whether it already contains a failure.
+	refreshRegLog: function() {
+		var self = this;
+		return callRegisterLog().then(function(r) {
+			self.setRegLog(r && r.log ? r.log : '');
+			return (r && r.log) || '';
+		}, function() { return ''; });
 	},
 
 	pollRegistration: function(btn) {
 		var self = this;
 		var tries = 0;
+		var label = btn.textContent;
 		var tick = function() {
 			if (++tries > 90) {   // ~3 minutes
-				if (self.regStatusEl) self.regStatusEl.textContent = 'Регистрация не завершилась.';
-				btn.disabled = false;
+				// A timeout is not a cause: pull the log and show what the engine
+				// actually said last, instead of hiding the reason behind a
+				// generic message.
+				self.refreshRegLog().then(function(text) {
+					if (self.regStatusEl) {
+						self.regStatusEl.textContent = text && text.length
+							? 'Регистрация не завершилась — подробности ниже.'
+							: 'Регистрация не завершилась, лог пуст.';
+					}
+					btn.disabled = false;
+					btn.textContent = label;
+				});
 				return;
 			}
 			callAccountStatus().then(function(a) {
@@ -639,8 +693,24 @@ return view.extend({
 					window.location.reload();
 					return;
 				}
-				if (self.regStatusEl) self.regStatusEl.textContent = 'Регистрация... (' + tries + ' с)';
-				window.setTimeout(tick, 2000);
+				// A registration can end without producing an account - the engine
+				// exits non-zero and never writes one. accountStatus cannot tell
+				// that apart from "still working", so the pidfile is the signal:
+				// once nothing is running and no account appeared, it failed.
+				self.refreshRegLog().then(function(text) {
+					if (!a || !a.registering) {
+						if (self.regStatusEl) {
+							self.regStatusEl.textContent = text && text.length
+								? 'Регистрация не удалась — причина в логе ниже.'
+								: 'Регистрация не удалась, лог пуст.';
+						}
+						btn.disabled = false;
+						btn.textContent = label;
+						return;
+					}
+					if (self.regStatusEl) self.regStatusEl.textContent = 'Регистрация... (' + tries + ' с)';
+					window.setTimeout(tick, 2000);
+				});
 			}, function() { window.setTimeout(tick, 2000); });
 		};
 		tick();

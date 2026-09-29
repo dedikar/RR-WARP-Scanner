@@ -63,6 +63,30 @@ Telegram. Движок — Go-бинарник (userspace AmneziaWG), ядро �
 - **Лог запуска** отвечает на вопрос «что и куда пошло»:
   `proto=awg perSubnet=6 total~6 jobs=8 timeout=3 tg=on tunPing=on speed=top10 port=auto targets=8.34.70.0/24`
   и отдельной строкой `pid=… out=… log=…`.
+- **Регистрация с видимым ходом.** Регистрация аккаунта WARP идёт до трёх минут
+  и проходит цепочку: API напрямую → релей → WARP-туннель (сначала `awg`, потом
+  `wg`). Пока она идёт, под кнопкой раскрывается панель с логом движка, а при
+  сбое там же видна его причина — раньше в этом месте был только счётчик секунд,
+  и при неудаче страница сообщала «не завершилась» без единой зацепки.
+
+  На живой сети это выглядит так (реальный лог с роутера, когда API Cloudflare
+  заблокирован провайдером):
+
+  ```
+  00:39:08  engine  Checking Cloudflare API availability...
+  00:39:11  engine  API unreachable directly
+  00:39:11  engine  Registering through the relay (https://edge-client-api.vercel.app)...
+  00:39:56  engine  relay: Post "...": Client.Timeout exceeded while awaiting headers
+  00:39:56  engine  Registering through a WARP tunnel (pass -proxy to use a proxy instead)
+  00:39:56  engine  probing awg (default iCloud I1) endpoints...
+  00:40:03  engine  Registered fresh WARP account -> /etc/rrws-account.json
+  ```
+
+  То есть при заблокированном API аккаунт всё равно выдаётся — через
+  userspace-туннель. Отдельный прокси для этого не нужен: движок поднимает
+  туннель сам, а ядерный `kmod-amneziawg` для этого не требуется.
+  Строки регистрации попадают и в общий лог страницы, вперемешку со строками
+  скана и бэкенда.
 
 - **Шапка как в предыдущем пакете**: заголовок, строка с версией, таблица
   «Аккаунт WARP | ЗАРЕГИСТРИРОВАН». Рядом с блоком аккаунта — плитка-баннер
