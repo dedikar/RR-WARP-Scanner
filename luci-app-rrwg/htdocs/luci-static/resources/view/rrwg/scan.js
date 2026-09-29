@@ -124,13 +124,24 @@ function injectPageCss() {
 	if (pageCssInjected) return;
 	pageCssInjected = true;
 	var css = [
-		'.rrwg-panel {',
-		'  border: 1px solid var(--border-color-high, #c9c9c9);',
-		'  box-shadow: 0 0 0 1px rgba(127, 127, 127, .12);',
+		'html .cbi-section.rrwg-panel, html .rrwg-panel {',
+		// White frame, deliberately brighter than the theme's border tokens. Those
+		// are tuned to be barely visible against the theme's own background
+		// (border-high is hsl(220 14% 22%) on hsl(220 20% 10%)), which made the
+		// panels read as undivided text. Slight transparency keeps it from being
+		// harsh in the light theme.
+		'  border: 1px solid rgba(255, 255, 255, .85);',
+		'  box-shadow: 0 0 0 1px rgba(255, 255, 255, .12);',
 		'  border-radius: 6px;',
 		'  padding: 12px 14px;',
 		'  margin: 14px 0;',
 		'  background: var(--background-color-medium, transparent);',
+		'}',
+		// On a light background a white frame is invisible, so the same rule
+		// switches to a dark frame there.
+		'html:not([data-darkmode="true"]) .cbi-section.rrwg-panel, html:not([data-darkmode="true"]) .rrwg-panel {',
+		'  border-color: rgba(0, 0, 0, .55);',
+		'  box-shadow: 0 0 0 1px rgba(0, 0, 0, .08);',
 		'}',
 		'.rrwg-panel > h3:first-child {',
 		'  margin-top: 0;',
@@ -145,7 +156,7 @@ function injectPageCss() {
 		'}',
 		'html[data-darkmode="true"] .rrwg-panel pre { background: #111; }',
 		'.rrwg-checklist {',
-		'  border: 1px solid var(--border-color-high, #c9c9c9);',
+		'  border: 1px solid rgba(255, 255, 255, .5);',
 		'  border-radius: 4px;',
 		'}',
 		// A clickable disclosure needs to look clickable: the log summary was
@@ -154,7 +165,7 @@ function injectPageCss() {
 		'  cursor: pointer;',
 		'  padding: 6px 10px;',
 		'  font-weight: 600;',
-		'  border: 1px solid var(--border-color-high, #c9c9c9);',
+		'  border: 1px solid rgba(255, 255, 255, .85);',
 		'  border-radius: 6px;',
 		'  background: var(--background-color-low, transparent);',
 		'  list-style: none;',
