@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// The JSON report is a contract with the LuCI backend (luci.rrwg reads these
+// The JSON report is a contract with the LuCI backend (luci.rrws reads these
 // exact field names), so the shape is pinned here rather than left to chance.
 
 func TestJSONFromPhaseReportsCounts(t *testing.T) {

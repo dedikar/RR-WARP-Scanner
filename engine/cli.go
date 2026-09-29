@@ -132,7 +132,7 @@ func main() {
 	enableVirtualTerminal()
 
 	// When stderr is not a terminal the output is being captured - the LuCI
-	// backend redirects it into /tmp/rrwg-state/scan.log. Timestamping it lets
+	// backend redirects it into /tmp/rrws-state/scan.log. Timestamping it lets
 	// the page merge this log with its own in chronological order. On a real
 	// terminal the TUI draws the screen itself, so timestamps there would only
 	// corrupt the layout.

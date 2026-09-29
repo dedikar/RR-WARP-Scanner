@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build luci-app-rrwg.ipk (OpenWrt 24.10 / opkg) and/or .apk (25.12 / apk-tools).
+# Build luci-app-rrws.ipk (OpenWrt 24.10 / opkg) and/or .apk (25.12 / apk-tools).
 #
 # Unlike the previous shell-only package, this one carries a compiled Go binary,
 # so the build has three stages:
@@ -14,11 +14,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SRC="$ROOT_DIR/luci-app-rrwg"
+SRC="$ROOT_DIR/luci-app-rrws"
 ENGINE="$ROOT_DIR/engine"
 STATE="$ROOT_DIR/version.txt"
-PKG_NAME="luci-app-rrwg"
-GO_BIN="rrwg"
+PKG_NAME="luci-app-rrws"
+GO_BIN="rrws"
 # OpenWrt target: RouteRich is mediatek/filogic, aarch64_cortex-a53.
 GOARCH_TARGET="arm64"
 
@@ -49,7 +49,7 @@ next_version() {
 
 # Argument handling: the format may be given on its own (./build.sh ipk) or with
 # a version (./build.sh 0.3.1-r3 ipk). Treating a lone "ipk" as the version
-# produced "luci-app-rrwg_ipk_all.ipk", so the format is detected first.
+# produced "luci-app-rrws_ipk_all.ipk", so the format is detected first.
 if [ -n "${1:-}" ]; then
 	case "$1" in
 		ipk|apk|both) FMT="$1"; VERSION="" ;;
@@ -139,10 +139,10 @@ install -m 755 "$BIN_PATH" "$WORK/pkg/usr/bin/$GO_BIN"
 find "$WORK/pkg" -type d -exec chmod 755 {} +
 find "$WORK/pkg" -type f -exec chmod 644 {} +
 # rpcd silently ignores a world-writable ucode file, so these are explicit:
-[ -f "$WORK/pkg/usr/share/rpcd/ucode/luci.rrwg" ] && chmod 644 "$WORK/pkg/usr/share/rpcd/ucode/luci.rrwg"
+[ -f "$WORK/pkg/usr/share/rpcd/ucode/luci.rrws" ] && chmod 644 "$WORK/pkg/usr/share/rpcd/ucode/luci.rrws"
 [ -f "$WORK/pkg/usr/bin/$GO_BIN" ] && chmod 755 "$WORK/pkg/usr/bin/$GO_BIN"
 find "$WORK/pkg/usr/bin" -name '*.sh' -exec chmod 755 {} + 2>/dev/null || true
-[ -f "$WORK/pkg/etc/uci-defaults/99_rrwg" ] && chmod 755 "$WORK/pkg/etc/uci-defaults/99_rrwg"
+[ -f "$WORK/pkg/etc/uci-defaults/99_rrws" ] && chmod 755 "$WORK/pkg/etc/uci-defaults/99_rrws"
 
 # every installable path relative to the package root, for Installed-Size
 INSTALLED_KB=$(( $(du -sk "$WORK/pkg" | cut -f1) ))
@@ -153,7 +153,7 @@ INSTALLED_SIZE=$(( INSTALLED_KB * 1024 ))
 # path replaced them.
 DEPENDS="libc, ca-certificates, luci-base, rpcd-mod-ucode"
 
-DESC="RR WARP Scanner NG (luci-app-rrwg). Scans Cloudflare WARP endpoints from the router using a userspace AmneziaWG engine, ranks them by latency and real Telegram reachability, and imports the best into a WARP interface. LuCI page under Services -> RR WARP Scanner NG."
+DESC="RR WARP Scanner (luci-app-rrws). Scans Cloudflare WARP endpoints from the router using a userspace AmneziaWG engine, ranks them by latency and real Telegram reachability, and imports the best into a WARP interface. LuCI page under Services -> RR WARP Scanner."
 
 # ---------------------------------------------------------------- 3. ipk -----
 build_ipk() {
@@ -188,14 +188,14 @@ rm -rf /tmp/luci-modulecache 2>/dev/null
 # first scan - which looks exactly like "the package does nothing".
 ARCH_LOCAL=$(sed -n "s/^DISTRIB_ARCH='\(.*\)'/\1/p" /etc/openwrt_release 2>/dev/null)
 ENGINE_WORKS=no
-if [ -x /usr/bin/rrwg ]; then
-	/usr/bin/rrwg version >/dev/null 2>&1 && ENGINE_WORKS=yes
+if [ -x /usr/bin/rrws ]; then
+	/usr/bin/rrws version >/dev/null 2>&1 && ENGINE_WORKS=yes
 fi
-logger -t rrwg "installed: router arch ${ARCH_LOCAL:-unknown}, engine runs: $ENGINE_WORKS"
+logger -t rrws "installed: router arch ${ARCH_LOCAL:-unknown}, engine runs: $ENGINE_WORKS"
 if [ "$ENGINE_WORKS" != yes ]; then
-	logger -t rrwg "WARNING: engine does not run on this architecture; package built for aarch64_cortex-a53"
-	logger -t rrwg "  check manually: /usr/bin/rrwg version"
-	logger -t rrwg "  free on /overlay: $(df -h /overlay 2>/dev/null | tail -1)"
+	logger -t rrws "WARNING: engine does not run on this architecture; package built for aarch64_cortex-a53"
+	logger -t rrws "  check manually: /usr/bin/rrws version"
+	logger -t rrws "  free on /overlay: $(df -h /overlay 2>/dev/null | tail -1)"
 fi
 exit 0
 EOF
@@ -206,11 +206,11 @@ EOF
 [ -n "$IPKG_INSTROOT" ] && exit 0
 # Leave no scan process behind: a running engine holds a tunnel open and keeps
 # the binary busy, which makes the file busy on removal.
-if [ -x /usr/bin/rrwg ]; then
-	[ -f /tmp/rrwg/pid ] && kill -TERM "$(cat /tmp/rrwg/pid 2>/dev/null)" 2>/dev/null
-	killall rrwg 2>/dev/null
+if [ -x /usr/bin/rrws ]; then
+	[ -f /tmp/rrws/pid ] && kill -TERM "$(cat /tmp/rrws/pid 2>/dev/null)" 2>/dev/null
+	killall rrws 2>/dev/null
 fi
-rm -f /tmp/rrwg/pid /tmp/rrwg/progress
+rm -f /tmp/rrws/pid /tmp/rrws/progress
 exit 0
 EOF
 	chmod 755 "$WORK/prerm"
@@ -241,8 +241,8 @@ exit 0
 EOF
 	cat > "$SCRIPTS/pre-deinstall" <<'EOF'
 #!/bin/sh
-killall rrwg 2>/dev/null
-rm -f /tmp/rrwg/pid /tmp/rrwg/progress
+killall rrws 2>/dev/null
+rm -f /tmp/rrws/pid /tmp/rrws/progress
 exit 0
 EOF
 	chmod 755 "$SCRIPTS/post-install" "$SCRIPTS/pre-deinstall"

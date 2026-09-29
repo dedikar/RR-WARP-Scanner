@@ -6,13 +6,13 @@
 'require uci';
 'require dom';
 
-// RR WARP Scanner NG - LuCI front end for the /usr/bin/rrwg engine.
+// RR WARP Scanner - LuCI front end for the /usr/bin/rrws engine.
 //
 // The page no longer parses fixed-width result lines: the engine emits JSON and
 // this view renders it directly, which is what makes the Telegram column
 // possible (the old 7-field parser could not carry an 8th field).
 
-var XHR_RELOAD_GUARD_KEY = 'rrwg:xhr-reload-at';
+var XHR_RELOAD_GUARD_KEY = 'rrws:xhr-reload-at';
 var XHR_RELOAD_GUARD_WINDOW_MS = 30000;
 
 function isXhrError(e) {
@@ -27,7 +27,7 @@ function forceReloadAfterXhrError() {
 		if (Date.now() - last < XHR_RELOAD_GUARD_WINDOW_MS) return;
 		sessionStorage.setItem(XHR_RELOAD_GUARD_KEY, String(Date.now()));
 	} catch (e) { /* sessionStorage unavailable - reload anyway */ }
-	window.location.replace(window.location.pathname + '?_rrwg_xhr_reload=' + Date.now());
+	window.location.replace(window.location.pathname + '?_rrws_xhr_reload=' + Date.now());
 }
 
 function declare(opts) {
@@ -51,11 +51,11 @@ window.addEventListener('unhandledrejection', function(e) {
 
 // ------------------------------------------------------------------- rpc ----
 
-var callAccountStatus = declare({ object: 'luci.rrwg', method: 'accountStatus', params: {}, reject: false });
-var callDeviceCheck   = declare({ object: 'luci.rrwg', method: 'deviceCheck', params: {}, reject: false });
-var callConfBase      = declare({ object: 'luci.rrwg', method: 'confBase', params: {}, reject: false });
-var callVersion       = declare({ object: 'luci.rrwg', method: 'version', params: {}, reject: false });
-var callGetSettings   = declare({ object: 'luci.rrwg', method: 'getSettings', params: {}, reject: false });
+var callAccountStatus = declare({ object: 'luci.rrws', method: 'accountStatus', params: {}, reject: false });
+var callDeviceCheck   = declare({ object: 'luci.rrws', method: 'deviceCheck', params: {}, reject: false });
+var callConfBase      = declare({ object: 'luci.rrws', method: 'confBase', params: {}, reject: false });
+var callVersion       = declare({ object: 'luci.rrws', method: 'version', params: {}, reject: false });
+var callGetSettings   = declare({ object: 'luci.rrws', method: 'getSettings', params: {}, reject: false });
 // Named saveOpts, not saveSettings: LuCI already owns a `saveSettings` on the rpc
 // surface, and a backend method sharing that name never saw this page's calls.
 //
@@ -88,19 +88,19 @@ function ubusCall(object, method, params) {
 }
 
 function callSaveSettings(opts) {
-	return ubusCall('luci.rrwg', 'saveOpts', opts);
+	return ubusCall('luci.rrws', 'saveOpts', opts);
 }
-var callScanStart     = declare({ object: 'luci.rrwg', method: 'scanStart', params: {}, reject: false });
-var callScanStop      = declare({ object: 'luci.rrwg', method: 'scanStop', params: {}, reject: false });
-var callScanStatus    = declare({ object: 'luci.rrwg', method: 'scanStatus', params: {}, reject: false });
-var callScanResult    = declare({ object: 'luci.rrwg', method: 'scanResult', params: {}, reject: false });
-var callScanLog       = declare({ object: 'luci.rrwg', method: 'scanLog', params: {}, reject: false });
-var callScanLogClear  = declare({ object: 'luci.rrwg', method: 'scanLogClear', params: {}, reject: false });
-var callRegister      = declare({ object: 'luci.rrwg', method: 'register', params: {}, reject: false });
-var callRenewAccount  = declare({ object: 'luci.rrwg', method: 'renewAccount', params: {}, reject: false });
-var callDeleteAccount = declare({ object: 'luci.rrwg', method: 'deleteAccount', params: {}, reject: false });
-var callRegisterLog   = declare({ object: 'luci.rrwg', method: 'registerLog', params: {}, reject: false });
-var callApplyBest     = declare({ object: 'luci.rrwg', method: 'applyBest', params: { iface: 'iface', endpoint: 'endpoint' }, reject: false });
+var callScanStart     = declare({ object: 'luci.rrws', method: 'scanStart', params: {}, reject: false });
+var callScanStop      = declare({ object: 'luci.rrws', method: 'scanStop', params: {}, reject: false });
+var callScanStatus    = declare({ object: 'luci.rrws', method: 'scanStatus', params: {}, reject: false });
+var callScanResult    = declare({ object: 'luci.rrws', method: 'scanResult', params: {}, reject: false });
+var callScanLog       = declare({ object: 'luci.rrws', method: 'scanLog', params: {}, reject: false });
+var callScanLogClear  = declare({ object: 'luci.rrws', method: 'scanLogClear', params: {}, reject: false });
+var callRegister      = declare({ object: 'luci.rrws', method: 'register', params: {}, reject: false });
+var callRenewAccount  = declare({ object: 'luci.rrws', method: 'renewAccount', params: {}, reject: false });
+var callDeleteAccount = declare({ object: 'luci.rrws', method: 'deleteAccount', params: {}, reject: false });
+var callRegisterLog   = declare({ object: 'luci.rrws', method: 'registerLog', params: {}, reject: false });
+var callApplyBest     = declare({ object: 'luci.rrws', method: 'applyBest', params: { iface: 'iface', endpoint: 'endpoint' }, reject: false });
 
 var TG_TOTAL = 5;
 
@@ -118,13 +118,13 @@ var TG_TOTAL = 5;
 //
 // LuCI themes do not style .cbi-section with a visible border, which is why the
 // account and scan blocks looked like bare text while the filter blocks had
-// frames - the frames were mine, added ad hoc. Now every block uses .rrwg-panel.
+// frames - the frames were mine, added ad hoc. Now every block uses .rrws-panel.
 var pageCssInjected = false;
 function injectPageCss() {
 	if (pageCssInjected) return;
 	pageCssInjected = true;
 	var css = [
-		'html .cbi-section.rrwg-panel, html .rrwg-panel {',
+		'html .cbi-section.rrws-panel, html .rrws-panel {',
 		// White frame, deliberately brighter than the theme's border tokens. Those
 		// are tuned to be barely visible against the theme's own background
 		// (border-high is hsl(220 14% 22%) on hsl(220 20% 10%)), which made the
@@ -139,29 +139,29 @@ function injectPageCss() {
 		'}',
 		// On a light background a white frame is invisible, so the same rule
 		// switches to a dark frame there.
-		'html:not([data-darkmode="true"]) .cbi-section.rrwg-panel, html:not([data-darkmode="true"]) .rrwg-panel {',
+		'html:not([data-darkmode="true"]) .cbi-section.rrws-panel, html:not([data-darkmode="true"]) .rrws-panel {',
 		'  border-color: rgba(0, 0, 0, .55);',
 		'  box-shadow: 0 0 0 1px rgba(0, 0, 0, .08);',
 		'}',
-		'.rrwg-panel > h3:first-child {',
+		'.rrws-panel > h3:first-child {',
 		'  margin-top: 0;',
 		'  padding-bottom: 6px;',
 		'  border-bottom: 1px solid var(--border-color-low, #e4e4e4);',
 		'}',
 		// The log pane and the checkbox lists sit inside a panel and need the
 		// same treatment as the panel border, not the old fixed colours.
-		'.rrwg-panel pre {',
+		'.rrws-panel pre {',
 		'  background: var(--background-color-low, #f7f7f7);',
 		'  border: 1px solid var(--border-color-low, #e4e4e4);',
 		'}',
-		'html[data-darkmode="true"] .rrwg-panel pre { background: #111; }',
-		'.rrwg-checklist {',
+		'html[data-darkmode="true"] .rrws-panel pre { background: #111; }',
+		'.rrws-checklist {',
 		'  border: 1px solid rgba(255, 255, 255, .5);',
 		'  border-radius: 4px;',
 		'}',
 		// A clickable disclosure needs to look clickable: the log summary was
 		// plain text and read as an empty area.
-		'.rrwg-disclosure > summary {',
+		'.rrws-disclosure > summary {',
 		'  cursor: pointer;',
 		'  padding: 6px 14px;',
 		'  font-weight: 600;',
@@ -177,10 +177,10 @@ function injectPageCss() {
 		'  gap: 8px;',
 		'  user-select: none;',
 		'}',
-		'.rrwg-disclosure > summary::-webkit-details-marker { display: none; }',
+		'.rrws-disclosure > summary::-webkit-details-marker { display: none; }',
 		// Triangle drawn from a border so it does not depend on a font glyph
 		// being present on the router's browser.
-		'.rrwg-disclosure > summary::before {',
+		'.rrws-disclosure > summary::before {',
 		'  content: "";',
 		'  width: 0; height: 0;',
 		'  border-left: 6px solid currentColor;',
@@ -188,9 +188,9 @@ function injectPageCss() {
 		'  border-bottom: 5px solid transparent;',
 		'  transition: transform .15s;',
 		'}',
-		'.rrwg-disclosure[open] > summary::before { transform: rotate(90deg); }',
-		'.rrwg-disclosure[open] > summary { margin-bottom: 8px; }',
-		'.rrwg-disclosure[open] > summary { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }',
+		'.rrws-disclosure[open] > summary::before { transform: rotate(90deg); }',
+		'.rrws-disclosure[open] > summary { margin-bottom: 8px; }',
+		'.rrws-disclosure[open] > summary { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }',
 	].join('\n');
 
 	var el = document.createElement('style');
@@ -225,7 +225,7 @@ function mkCheckList(selected, choices, placeholder) {
 	for (var i = 0; i < (selected || []).length; i++)
 		sel[String(selected[i]).toUpperCase()] = true;
 
-	var box = E('div', { class: 'rrwg-checklist' });
+	var box = E('div', { class: 'rrws-checklist' });
 	var summary = E('div', {
 		style: 'padding:6px 10px;cursor:pointer;user-select:none;color:#8cf'
 	});
@@ -413,7 +413,7 @@ return view.extend({
 				: 'background:#8b1a1a;color:#fff;padding:2px 8px;border-radius:3px;font-weight:600'
 		}, acct.registered ? 'ЗАРЕГИСТРИРОВАН' : 'НЕ ЗАРЕГИСТРИРОВАН');
 
-		headerEl.appendChild(E('h2', {}, 'RR WARP Scanner NG'));
+		headerEl.appendChild(E('h2', {}, 'RR WARP Scanner'));
 		var descr = E('div', { 'class': 'cbi-map-descr' },
 			'Поиск рабочих Cloudflare WARP-эндпоинтов через userspace-движок AmneziaWG. Версия: ');
 		descr.appendChild(appVerEl);
@@ -445,7 +445,7 @@ return view.extend({
 			style: 'display:none;text-decoration:none;cursor:pointer;outline:none;border:1px solid #d9534f;border-radius:4px;padding:10px 12px;box-sizing:border-box;align-items:center;gap:6px'
 		});
 		deviceBanner.appendChild(E('img', {
-			src: L.resource('rrwg/logo.png'),
+			src: L.resource('rrws/logo.png'),
 			style: 'width:40px;height:40px;object-fit:contain;flex-shrink:0'
 		}));
 		deviceBanner.appendChild(E('span', { style: 'color:#4a9eff;font-weight:600' }, 'Информация'));
@@ -479,7 +479,7 @@ return view.extend({
 		if (dev.authorized === false) {
 			deviceBanner.style.display = 'flex';
 			if (window.console) {
-				console.log('[rrwg] unsupported device (no ' + (dev.oui || '24:0F:5E') +
+				console.log('[rrws] unsupported device (no ' + (dev.oui || '24:0F:5E') +
 					' OUI): ' + JSON.stringify(dev.macs || {}));
 			}
 		}
@@ -505,7 +505,7 @@ return view.extend({
 		// flex:1 so the block fills the row next to the vendor banner (which is
 		// hidden on supported hardware, leaving this full width). min-width:0
 		// stops long keys from forcing the row wider than the viewport.
-		var sec = E('div', { 'class': 'cbi-section rrwg-panel', style: 'flex:1 1 auto;min-width:0' });
+		var sec = E('div', { 'class': 'cbi-section rrws-panel', style: 'flex:1 1 auto;min-width:0' });
 		sec.appendChild(E('h3', {}, 'Аккаунт WARP'));
 
 		if (acct.registered) {
@@ -607,7 +607,7 @@ return view.extend({
 
 	renderScan: function(s, res0) {
 		var self = this;
-		var sec = E('div', { 'class': 'cbi-section rrwg-panel' });
+		var sec = E('div', { 'class': 'cbi-section rrws-panel' });
 		sec.appendChild(E('h3', {}, 'Сканирование эндпоинтов'));
 
 		var f = function(label, node) {
@@ -714,7 +714,7 @@ return view.extend({
 		};
 
 		var addSection = function(title, hint, selected, choices, placeholder, items, key) {
-			var wrap = E('div', { class: 'cbi-section rrwg-panel' });
+			var wrap = E('div', { class: 'cbi-section rrws-panel' });
 			wrap.appendChild(E('h3', {}, title));
 			wrap.appendChild(E('p', { class: 'text-muted', style: 'margin:2px 0 8px 0' }, hint));
 			var dd = mkCheckList(selected, choices, placeholder);
@@ -739,7 +739,7 @@ return view.extend({
 			s.include_nodes || [], mkChoices(s.nodes || []), 'Только узлы...', 4, 'includeNodes');
 
 		// --- advanced: obfuscation ---------------------------------------
-		var adv = E('div', { 'class': 'cbi-section rrwg-panel' });
+		var adv = E('div', { 'class': 'cbi-section rrws-panel' });
 		adv.appendChild(E('h3', {}, 'Дополнительно: обфускация, порт, IPv6, полный перебор'));
 		var advBody = E('div', {});
 
@@ -783,7 +783,7 @@ return view.extend({
 		// through each endpoint one at a time, so how many get measured is what
 		// tells the user how long the run will take. The checkbox used to live in
 		// "Дополнительно", far from the field it controls.
-		var spSection = E('div', { 'class': 'cbi-section rrwg-panel' });
+		var spSection = E('div', { 'class': 'cbi-section rrws-panel' });
 		spSection.appendChild(E('h3', {}, 'Тест скорости'));
 		spSection.appendChild(E('p', { 'class': 'text-muted', style: 'margin:2px 0 8px 0' },
 			'Замер download внутри туннеля, по одному эндпоинту за раз. Идёт после обычного скана ' +
@@ -860,7 +860,7 @@ return view.extend({
 		this.stopBtn = stopBtn;
 
 		// --- results ------------------------------------------------------
-		var resBox = E('div', { id: 'rrwg-results' });
+		var resBox = E('div', { id: 'rrws-results' });
 		sec.appendChild(resBox);
 		this.resultsEl = resBox;
 		this.renderResults(res0);
@@ -918,7 +918,7 @@ return view.extend({
 		// successful save.
 		if (window.console && (!payload.exclude || !payload.exclude.length) &&
 		    (!payload.exclude_nodes || !payload.exclude_nodes.length)) {
-			console.warn('rrwg: saving with no subnet/node selection', payload);
+			console.warn('rrws: saving with no subnet/node selection', payload);
 		}
 		return callSaveSettings(payload);
 	},
@@ -930,10 +930,10 @@ return view.extend({
 		try {
 			var p = this.collectAndSave();
 			if (p && p.then) p.then(null, function(e) {
-				if (window.console) console.error('rrwg persist failed:', e);
+				if (window.console) console.error('rrws persist failed:', e);
 			});
 		} catch (e) {
-			if (window.console) console.error('rrwg persist threw:', e);
+			if (window.console) console.error('rrws persist threw:', e);
 		}
 	},
 
@@ -1068,7 +1068,7 @@ return view.extend({
 				var blob = new Blob([txt], { type: 'text/plain' });
 				var a = document.createElement('a');
 				a.href = URL.createObjectURL(blob);
-				a.download = 'rrwg-configs.txt';
+				a.download = 'rrws-configs.txt';
 				a.click();
 				setTimeout(function() { URL.revokeObjectURL(a.href); }, 2000);
 			});
@@ -1156,8 +1156,8 @@ return view.extend({
 
 	renderLog: function() {
 		var self = this;
-		var sec = E('div', { 'class': 'cbi-section rrwg-panel' });
-		var det = E('details', { 'class': 'rrwg-disclosure' });
+		var sec = E('div', { 'class': 'cbi-section rrws-panel' });
+		var det = E('details', { 'class': 'rrws-disclosure' });
 		det.appendChild(E('summary', {}, 'Логи'));
 
 		// One merged log, in chronological order, like a chat: the backend

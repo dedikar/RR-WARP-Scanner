@@ -19,7 +19,7 @@ coverage.txt
 # These are gitignored on purpose: this repository is published.
 *.pem
 *account*.json
-rrwg-account.json
+rrws-account.json
 .env
 
 # Editor / OS noise.
@@ -27,3 +27,7 @@ rrwg-account.json
 *~
 .DS_Store
 Thumbs.db
+
+# Python bytecode from the on-router test scripts.
+__pycache__/
+*.pyc

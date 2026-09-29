@@ -1,4 +1,4 @@
-"""On-router acceptance test for luci-app-rrwg.
+"""On-router acceptance test for luci-app-rrws.
 
 Runs through the same ubus methods the LuCI page uses, so it exercises the whole
 path: backend -> engine -> JSON report -> scanResult.
@@ -27,15 +27,15 @@ NARROW = {
     ],
 }
 
-print(run(c, "ubus call luci.rrwg saveOpts '%s' 2>&1 | head -3" % json.dumps(NARROW)))
+print(run(c, "ubus call luci.rrws saveOpts '%s' 2>&1 | head -3" % json.dumps(NARROW)))
 
 print('--- scanStart ---')
-print(run(c, 'ubus call luci.rrwg scanStart 2>&1 | head -4'))
+print(run(c, 'ubus call luci.rrws scanStart 2>&1 | head -4'))
 
 print('--- polling scanStatus ---')
 last = ''
 for n in range(40):
-    st = run(c, 'ubus call luci.rrwg scanStatus 2>&1').strip()
+    st = run(c, 'ubus call luci.rrws scanStatus 2>&1').strip()
     try:
         d = json.loads(st)
         line = 'phase=%s done=%s/%s running=%s' % (
@@ -50,7 +50,7 @@ for n in range(40):
     time.sleep(3)
 
 print('--- scanResult ---')
-res = run(c, 'ubus call luci.rrwg scanResult 2>&1')
+res = run(c, 'ubus call luci.rrws scanResult 2>&1')
 try:
     d = json.loads(res)
     print('working=%s probed=%s tg_working=%s' % (

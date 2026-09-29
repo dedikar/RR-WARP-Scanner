@@ -1,9 +1,22 @@
 # Форк warpscout-tg для роутера RouteRich (OpenWrt 24.10 / 25.12)
 
-LuCI-приложение **RR WARP Scanner NG** ищет рабочие эндпоинты Cloudflare WARP
+LuCI-приложение **RR WARP Scanner** ищет рабочие эндпоинты Cloudflare WARP
 **прямо на роутере** и отбирает те, через которые действительно работает
 Telegram. Движок — Go-бинарник (userspace AmneziaWG), ядро и `kmod-amneziawg`
 не используются.
+
+## Имя пакета
+
+Пакет называется **`luci-app-rrws`** — то же имя, что у предыдущего приложения,
+и без суффикса NG, который носили промежуточные сборки. Переименование сквозное:
+имя пакета, ubus-объект `luci.rrws`, бинарник `/usr/bin/rrws`, бэкенд
+`/usr/share/rpcd/ucode/luci.rrws`, страница `…/view/rrws/scan.js` и файлы
+состояния `/etc/rrws-*.json`, `/tmp/rrws-state/`.
+
+На роутере, где стояла сборка под старым именем, остатки снимаются один раз
+скриптом `tests/migrate_rrwg_to_rrws.py`: он удаляет прежний пакет, переносит
+аккаунт WARP на новые имена (роутер сохраняет свою регистрацию, а не заводит
+новую) и ставит новый IPK. На чистой установке он не нужен.
 
 ## Зачем переписали
 
@@ -75,14 +88,15 @@ Telegram. Движок — Go-бинарник (userspace AmneziaWG), ядро �
 engine/                  форк warpscout-tg (Go), см. engine/UPSTREAM.md
   jsonout.go             НОВОЕ: машиночитаемый вывод для LuCI (-json)
   progress.go            НОВОЕ: файл прогресса для поллинга (-progress)
-luci-app-rrwg/
-  root/usr/bin/rrwg      бинарник (кладётся при сборке)
-  root/usr/share/rpcd/ucode/luci.rrwg   ubus-бэкенд
+luci-app-rrws/
+  root/usr/bin/rrws      бинарник (кладётся при сборке)
+  root/usr/share/rpcd/ucode/luci.rrws   ubus-бэкенд
   root/usr/share/rpcd/acl.d/…           ACL
   root/usr/share/luci/menu.d/…          пункт меню
-  htdocs/…/view/rrwg/scan.js            страница LuCI
+  htdocs/…/view/rrws/scan.js            страница LuCI
 build.sh                 кросс-сборка + ipk/apk
 tests/acceptance.py      приёмка на роутере через ubus
+tests/migrate_rrwg_to_rrws.py  снятие остатков старого имени (разовый)
 ```
 
 ## Сборка
@@ -126,14 +140,14 @@ UI выставлен по этому замеру. Значение 32, сто�
 ## Установка
 
 ```sh
-opkg install --force-reinstall /tmp/luci-app-rrwg_<ver>_all.ipk
+opkg install --force-reinstall /tmp/luci-app-rrws_<ver>_all.ipk
 # postinst сам делает rpcd reload
 ```
 
 Учётные данные роутера в репозитории не хранятся: тестовые скрипты берут их из
 переменных окружения (`ROUTER_HOST`, `ROUTER_USER`, `ROUTER_PASS`).
 
-Проверка: `ubus call luci.rrwg version`, `ubus call luci.rrwg accountStatus`.
+Проверка: `ubus call luci.rrws version`, `ubus call luci.rrws accountStatus`.
 
 ## Диагностика на чужом роутере
 
@@ -145,39 +159,39 @@ opkg install --force-reinstall /tmp/luci-app-rrwg_<ver>_all.ipk
 **1. Сразу после установки** — `postinst` пишет в системный лог:
 
 ```sh
-logread | grep rrwg
-# rrwg: установлен: архитектура роутера aarch64_cortex-a53, движок работает: yes
+logread | grep rrws
+# rrws: установлен: архитектура роутера aarch64_cortex-a53, движок работает: yes
 ```
 
 **2. При попытке запуска скана** — вместо ложного `{"started": true}` приходит
 внятная ошибка, а в лог уходит полный отчёт:
 
 ```
-rrwg: СБОЙ: движок не запускается (/usr/bin/rrwg version не отвечает)
-rrwg:   архитектура роутера: 'aarch64_cortex-a53' / arch aarch64_cortex-a53 10
-rrwg:   пакет собран под: aarch64_cortex-a53 (mediatek/filogic, Cortex-A53)
-rrwg:   движок /usr/bin/rrwg: есть
-rrwg:   движок version -> (пусто)
-rrwg:   права: -rwxr-xr-x 1 root root /usr/bin/rrwg
-rrwg:   бэкенд: /usr/share/rpcd/ucode/luci.rrwg есть
-rrwg:   аккаунт: /etc/rrwg-account.json есть
-rrwg:   свободно на /overlay: ... / свободно в /tmp: ...
+rrws: СБОЙ: движок не запускается (/usr/bin/rrws version не отвечает)
+rrws:   архитектура роутера: 'aarch64_cortex-a53' / arch aarch64_cortex-a53 10
+rrws:   пакет собран под: aarch64_cortex-a53 (mediatek/filogic, Cortex-A53)
+rrws:   движок /usr/bin/rrws: есть
+rrws:   движок version -> (пусто)
+rrws:   права: -rwxr-xr-x 1 root root /usr/bin/rrws
+rrws:   бэкенд: /usr/share/rpcd/ucode/luci.rrws есть
+rrws:   аккаунт: /etc/rrws-account.json есть
+rrws:   свободно на /overlay: ... / свободно в /tmp: ...
 ```
 
 **3. В логе запуска** — что именно сканируется:
 
 ```
-rrwg: scanStart proto=awg perSubnet=6 total~6 jobs=8 timeout=3 tg=on tunPing=on speed=top10 port=auto targets=8.34.70.0/24
-rrwg: scanStart pid=23543 out=/tmp/rrwg_result.json log=/tmp/rrwg-state/scan.log
+rrws: scanStart proto=awg perSubnet=6 total~6 jobs=8 timeout=3 tg=on tunPing=on speed=top10 port=auto targets=8.34.70.0/24
+rrws: scanStart pid=23543 out=/tmp/rrws_result.json log=/tmp/rrws-state/scan.log
 ```
 
 Порядок разбора при «не работает»:
 
-1. `logread | grep rrwg` — есть ли строка об установке и что в ней `движок работает:`
-2. `/usr/bin/rrwg version` — отвечает ли движок вообще
-3. `ubus call luci.rrwg scanStart` — текст ошибки прямо в ответе
-4. `cat /tmp/rrwg-state/scan.log` — что сказал движок, если он стартовал
-5. `cat /tmp/rrwg.rpc.log` — что и куда запускал бэкенд
+1. `logread | grep rrws` — есть ли строка об установке и что в ней `движок работает:`
+2. `/usr/bin/rrws version` — отвечает ли движок вообще
+3. `ubus call luci.rrws scanStart` — текст ошибки прямо в ответе
+4. `cat /tmp/rrws-state/scan.log` — что сказал движок, если он стартовал
+5. `cat /tmp/rrws.rpc.log` — что и куда запускал бэкенд
 
 ## Грабли, оплаченные временем
 
@@ -200,7 +214,7 @@ rrwg: scanStart pid=23543 out=/tmp/rrwg_result.json log=/tmp/rrwg-state/scan.log
    `length() == 0`, цикл не выполнялся, функция возвращала `null` — а
    вызывающий код трактовал это как «исключений нет». Пользователь снимал
    галочки, а скан шёл по всему пулу, и внешне всё выглядело рабочим.
-   В `luci.rrwg` порядок «константы → вызываемые → вызывающие» проверяется
+   В `luci.rrws` порядок «константы → вызываемые → вызывающие» проверяется
    скриптом (аудит должен покрывать и `const`, не только `function`).
 
 4. **`E()` в LuCI принимает ровно ОДИН дочерний аргумент.** `E('tr', {}, td1, td2)`
@@ -216,7 +230,7 @@ rrwg: scanStart pid=23543 out=/tmp/rrwg_result.json log=/tmp/rrwg-state/scan.log
    fetch('/ubus/', { method: 'POST',
      headers: { 'Content-Type': 'application/json' },
      body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'call',
-       params: [L.env.sessionid, 'luci.rrwg', 'saveOpts', opts] })
+       params: [L.env.sessionid, 'luci.rrws', 'saveOpts', opts] })
    }).then(r => r.json()).then(m => m.result[1]);
    ```
 
@@ -224,7 +238,7 @@ rrwg: scanStart pid=23543 out=/tmp/rrwg_result.json log=/tmp/rrwg-state/scan.log
    (сабмит форм), и вызов уходит в функцию фреймворка. Метод называется `saveOpts`.
 
 6. **Диагностика пустого сохранения:** `rpclog` в начале метода бэкенда, затем
-   `cat /tmp/rrwg.rpc.log`. Если лога нет — запрос не дошёл до rpcd, и проблема
+   `cat /tmp/rrws.rpc.log`. Если лога нет — запрос не дошёл до rpcd, и проблема
    на клиенте, а не в ACL. Перехват `L.rpc.call` в браузере показывает
    *намерение*, а не факт: он логировал корректный payload, пока реальный запрос
    не отправлялся вообще.

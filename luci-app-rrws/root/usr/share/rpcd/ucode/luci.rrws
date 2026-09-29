@@ -1,15 +1,15 @@
 #!/usr/bin/ucode
-// luci.rrwg - ubus backend for RR WARP Scanner NG.
+// luci.rrws - ubus backend for RR WARP Scanner.
 //
-// The scanning engine is the Go binary at /usr/bin/rrwg (fork of warpscout-tg).
+// The scanning engine is the Go binary at /usr/bin/rrws (fork of warpscout-tg).
 // This backend only marshals ubus calls into engine invocations and reads back
 // the engine's JSON report + progress file; it holds no scan logic of its own.
 //
 // Contract with the engine:
-//   rrwg scan ... --json          -> JSON report on stdout
-//   rrwg scan ... --progress FILE  -> one line, rewritten atomically:
+//   rrws scan ... --json          -> JSON report on stdout
+//   rrws scan ... --progress FILE  -> one line, rewritten atomically:
 //                                    phase1:<done>:<total> | phase2:<done>:<total> | done
-//   account file                   -> /etc/rrwg-account.json (same schema as upstream)
+//   account file                   -> /etc/rrws-account.json (same schema as upstream)
 
 // NOTE: no 'use strict' here. Under rpcd's module loader strict mode made the
 // method table below fail to resolve at call time - getSettings and version
@@ -18,26 +18,26 @@
 
 import { popen, readfile, writefile, stat, unlink, mkdir } from 'fs';
 
-const BIN = '/usr/bin/rrwg';
+const BIN = '/usr/bin/rrws';
 // Recorded so a failure report can state what the package was built for;
 // the binary is aarch64, while the package itself is marked 'all' because
 // it is mostly scripts - which is exactly how it lands on wrong hardware.
 const ENGINE_ARCH = 'aarch64_cortex-a53 (mediatek/filogic, Cortex-A53)';
-const BIN_DIR_UCODE = '/usr/share/rpcd/ucode/luci.rrwg';
-const ACCOUNT = '/etc/rrwg-account.json';
-const SETTINGS = '/etc/rrwg-settings.json';
-const RESULT = '/tmp/rrwg_result.json';        // fresh scan result
-const RESULT_SAVED = '/etc/rrwg-last-result.json'; // survives reboot
+const BIN_DIR_UCODE = '/usr/share/rpcd/ucode/luci.rrws';
+const ACCOUNT = '/etc/rrws-account.json';
+const SETTINGS = '/etc/rrws-settings.json';
+const RESULT = '/tmp/rrws_result.json';        // fresh scan result
+const RESULT_SAVED = '/etc/rrws-last-result.json'; // survives reboot
 // State lives in a directory of its own. The name deliberately differs from the
-// binary's (/usr/bin/rrwg) and from the account file's stem: an earlier layout
-// used /tmp/rrwg as a directory while /tmp/rrwg-account.json and /tmp/rrwg.json
+// binary's (/usr/bin/rrws) and from the account file's stem: an earlier layout
+// used /tmp/rrws as a directory while /tmp/rrws-account.json and /tmp/rrws.json
 // sat next to it, and ucode's fs.mkdir() silently failed to create it, so every
 // state write turned into a file at that path and the scan could not start.
-const RUNDIR = '/tmp/rrwg-state';
+const RUNDIR = '/tmp/rrws-state';
 const PROGRESS = RUNDIR + '/progress';
 const PIDFILE = RUNDIR + '/pid';
 const LOG = RUNDIR + '/scan.log';
-const RPC_LOG = '/tmp/rrwg.rpc.log';
+const RPC_LOG = '/tmp/rrws.rpc.log';
 const SCAN_ID = RUNDIR + '/scanid';
 const REG_LOG = RUNDIR + '/register.log';
 const REG_MARK = RUNDIR + '/registering';
@@ -46,7 +46,7 @@ const REG_MARK = RUNDIR + '/registering';
 // the top of the file: this ucode build mis-resolves a const declared between
 // functions, which surfaced as "left-hand side is not a function" from two
 // unrelated methods (same class of bug as the missing global join()/map()).
-const RRWG_OUI = '24:0f:5e';
+const RRWS_OUI = '24:0f:5e';
 
 // The engine decides its own protocol default (see engine/warp.go: on this
 // network plain WireGuard tunnels come up and pass no data). Declared here, above
@@ -208,7 +208,7 @@ function ensure_rundir() {
 // Writes one line to the system log. The rpcd ucode environment has no syslog
 // binding here, so logger(1) is the portable route; failures are non-fatal.
 function syslog(msg) {
-	try { command('logger -t rrwg ' + shellquote(msg)); } catch (e) {}
+	try { command('logger -t rrws ' + shellquote(msg)); } catch (e) {}
 }
 
 // Can the engine actually run? `version` is the cheapest subcommand and exits
@@ -319,7 +319,7 @@ function device_check() {
 		const mac = trim(read_file('/sys/class/net/' + candidates[i] + '/address') ?? '');
 		if (!length(mac)) continue;
 		macs[candidates[i]] = mac;
-		if (substr(mac, 0, 8) == RRWG_OUI) authorized = true;
+		if (substr(mac, 0, 8) == RRWS_OUI) authorized = true;
 	}
 	return {
 		authorized,
@@ -604,17 +604,17 @@ function scan_start(req) {
 		return { error: 'no WARP account - register one first' };
 
 	// Refuse to claim a run started when the engine cannot even be executed.
-	// Without this the old code answered {"started": true} with /usr/bin/rrwg
+	// Without this the old code answered {"started": true} with /usr/bin/rrws
 	// missing, and the only trace was "not found" buried in the scan log while
 	// the UI waited for a scan that would never produce anything.
 	if (!file_exists(BIN)) {
 		log_env('движок отсутствует: ' + BIN);
-		return { error: 'engine missing: ' + BIN + ' - package damaged. Details: logread | grep rrwg' };
+		return { error: 'engine missing: ' + BIN + ' - package damaged. Details: logread | grep rrws' };
 	}
 	if (!engine_runs()) {
 		log_env('движок не запускается (' + BIN + ' version не отвечает)');
 		return { error: 'engine will not run - the package is likely built for a different architecture (' +
-			ENGINE_ARCH + '). Details: logread | grep rrwg' };
+			ENGINE_ARCH + '). Details: logread | grep rrws' };
 	}
 
 	// Persist what the run used so the form and the result always agree.
@@ -696,7 +696,7 @@ function scan_start(req) {
 		const tail = read_file(LOG) ?? '';
 		syslog('scanStart: engine did not come up within 2s (pid=' + (length(startedPid) ? startedPid : 'none') +
 			'), вывод: ' + substr(tail, 0, 200));
-		return { error: 'engine did not start - check logread | grep rrwg' };
+		return { error: 'engine did not start - check logread | grep rrws' };
 	}
 	return { started: true };
 }
@@ -958,7 +958,7 @@ const methods = {
 	},
 	version: {
 		call: function() {
-			const v = command("sed -n 's/^Version: //p' /usr/lib/opkg/info/luci-app-rrwg.control 2>/dev/null");
+			const v = command("sed -n 's/^Version: //p' /usr/lib/opkg/info/luci-app-rrws.control 2>/dev/null");
 			return { version: length(v) ? v : 'unknown' };
 		}
 	},
@@ -1012,4 +1012,4 @@ const methods = {
 	},
 };
 
-return { 'luci.rrwg': methods };
+return { 'luci.rrws': methods };

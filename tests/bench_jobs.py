@@ -33,18 +33,18 @@ def measure(c, jobs):
         "exclude": EXCLUDE, "sample": SAMPLE, "timeout": 3, "jobs": jobs,
         "tg": False, "tun_ping": True, "speed": False, "port": 0,
     })
-    run(c, 'ubus call luci.rrwg saveOpts %s >/dev/null 2>&1' % shlex.quote(payload))
-    run(c, 'rm -f /tmp/rrwg-state/pid /tmp/rrwg-state/progress /tmp/rrwg_result.json')
+    run(c, 'ubus call luci.rrws saveOpts %s >/dev/null 2>&1' % shlex.quote(payload))
+    run(c, 'rm -f /tmp/rrws-state/pid /tmp/rrws-state/progress /tmp/rrws_result.json')
     time.sleep(1)
 
     t0 = time.time()
-    run(c, 'ubus call luci.rrwg scanStart >/dev/null 2>&1')
+    run(c, 'ubus call luci.rrws scanStart >/dev/null 2>&1')
 
     peak = 0.0
     min_free = 10 ** 9
     while time.time() - t0 < 500:
         time.sleep(3)
-        if run(c, 'cat /tmp/rrwg-state/progress 2>/dev/null').strip() == 'done':
+        if run(c, 'cat /tmp/rrws-state/progress 2>/dev/null').strip() == 'done':
             break
         try:
             peak = max(peak, float(run(c, 'cut -d" " -f1 /proc/loadavg').strip()))
@@ -57,7 +57,7 @@ def measure(c, jobs):
 
     elapsed = time.time() - t0
     try:
-        working = json.loads(run(c, 'cat /tmp/rrwg_result.json'))['working']
+        working = json.loads(run(c, 'cat /tmp/rrws_result.json'))['working']
     except Exception:
         working = -1
     return elapsed, working, peak, min_free

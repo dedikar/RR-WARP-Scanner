@@ -40,7 +40,7 @@ So `defaultProto` is `awg`. Reverting it would ship an app that finds nothing.
 The binary is cross-compiled in WSL, statically, with no cgo:
 
 ```sh
-CGO_ENABLED=0 GOOS=linux GOARrm64 go build -trimpath -ldflags "-s -w" -o rrwg .
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o rrws .
 ```
 
 `build.sh` in the repository root does this and packs the result into the ipk/apk.

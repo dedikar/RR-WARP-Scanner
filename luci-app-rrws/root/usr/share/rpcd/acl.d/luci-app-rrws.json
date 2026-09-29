@@ -1,9 +1,9 @@
 {
-	"luci-app-rrwg": {
-		"description": "Grant access to RR WARP Scanner NG",
+	"luci-app-rrws": {
+		"description": "Grant access to RR WARP Scanner",
 		"read": {
 			"ubus": {
-				"luci.rrwg": [
+				"luci.rrws": [
 					"accountStatus",
 					"deviceCheck",
 					"registerLog",
@@ -19,7 +19,7 @@
 		},
 		"write": {
 			"ubus": {
-				"luci.rrwg": [
+				"luci.rrws": [
 					"register",
 					"renewAccount",
 					"deleteAccount",

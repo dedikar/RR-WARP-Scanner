@@ -16,7 +16,7 @@ export GOOS=linux
 VAR="GO""ARCH"
 export "$VAR=arm64"
 
-OUT="${1:-<home>/rrwg-build.bin}"
+OUT="${1:-<home>/rrws-build.bin}"
 go build -trimpath -ldflags "-s -w" -o "$OUT" .
 file "$OUT" | cut -c1-70
 md5sum "$OUT"

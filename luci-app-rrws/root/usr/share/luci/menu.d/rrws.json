@@ -1,0 +1,13 @@
+{
+	"admin/services/rrws": {
+		"title": "RR WARP Scanner",
+		"order": 82,
+		"action": {
+			"type": "view",
+			"path": "rrws/scan"
+		},
+		"depends": {
+			"acl": [ "luci-app-rrws" ]
+		}
+	}
+}
