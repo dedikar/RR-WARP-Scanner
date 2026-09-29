@@ -65,15 +65,30 @@ type progressEmitter struct {
 	total int
 	done  int
 	label string
-	mu    sync.Mutex
+	// sawDone marks that a phase emitted its closing doneMsg. The next barBegin
+	// after that is the speed phase, not a repeat of phase 2.
+	sawDone bool
+	mu      sync.Mutex
 }
 
-func wrapEmitter(pw *progressWriter, inner emitter) emitter {
+// newProgressEmitter builds the single emitter shared by every phase of one run.
+func newProgressEmitter(pw *progressWriter) *progressEmitter {
 	if pw == nil {
-		return inner
+		return nil
 	}
-	pe := &progressEmitter{pw: pw, inner: inner}
-	return pe.emit
+	return &progressEmitter{pw: pw}
+}
+
+// finish writes the terminal "done" marker. Called once, when the whole run is
+// over - not per phase, because the scan's own end is followed by the speed
+// phase and the UI must keep showing progress through it.
+func (pe *progressEmitter) finish() {
+	if pe == nil {
+		return
+	}
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
+	pe.pw.done()
 }
 
 func (pe *progressEmitter) emit(msg tea.Msg) {
@@ -92,14 +107,25 @@ func (pe *progressEmitter) emit(msg tea.Msg) {
 			pe.pw.set(pe.label, pe.done, pe.total)
 		}
 	case barBeginMsg:
-		pe.label = "phase2"
+		// The scan emits one barBegin for phase 2, and the speed phase emits
+		// another after it. Both were labelled "phase2", so the speed phase never
+		// appeared in the progress file and the UI showed a finished scan while
+		// downloads were still running. Tell them apart by who started them.
 		pe.total = m.total
 		pe.done = 0
+		if pe.sawDone {
+			pe.label = "speed"
+		} else {
+			pe.label = "phase2"
+		}
 		pe.pw.set(pe.label, pe.done, pe.total)
 	case probedMsg:
 		pe.done++
 		pe.pw.set(pe.label, pe.done, pe.total)
 	case doneMsg:
-		pe.pw.done()
+		// A doneMsg ends the phase that was running, not necessarily the whole
+		// run: the scan's own done arrives before the speed phase begins.
+		pe.sawDone = true
+		pe.pw.set(pe.label, pe.done, pe.total)
 	}
 }

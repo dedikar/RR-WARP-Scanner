@@ -176,8 +176,14 @@ func runScanCmd(ctx context.Context, opts options) error {
 	if pw != nil {
 		defer pw.done()
 	}
+	// A single emitter shared by the scan and the speed phase: it owns the
+	// "which phase are we in" state that the progress file reports.
+	pe := newProgressEmitter(pw)
+	if pw != nil {
+		defer pe.finish()
+	}
 
-	ph, err := runScanUI(ctx, cancel, opts, run, ips, time.Duration(opts.timeoutSec)*time.Second, "", "", pw)
+	ph, err := runScanUI(ctx, cancel, opts, run, ips, time.Duration(opts.timeoutSec)*time.Second, "", "", pe)
 	if err != nil {
 		if opts.jsonOut {
 			_ = writeJSONError(os.Stdout, err.Error())
@@ -193,7 +199,10 @@ func runScanCmd(ctx context.Context, opts options) error {
 	}
 
 	if opts.speed && showsSpeed(opts) {
-		runWithUI(opts, cancel, false, "", "q to skip the rest", nil, func(emit emitter) {
+		// pw, not nil: the speed phase reports its own progress, and passing nil
+		// meant its barBegin/probed events never reached the progress file - the
+		// UI showed a finished scan (100%) while downloads were still running.
+		runWithUI(opts, cancel, false, "", "q to skip the rest", pe, func(emit emitter) {
 			measureSpeed(ctx, ph, time.Duration(opts.timeoutSec)*time.Second, opts.speedTop, emit)
 		})
 	}
@@ -466,10 +475,10 @@ func printBest(w io.Writer, ph phaseResult) error {
 	return nil
 }
 
-func runScanUI(ctx context.Context, cancel context.CancelFunc, opts options, run protoRun, ips []netip.Addr, timeout time.Duration, header, quitHint string, pw *progressWriter) (phaseResult, error) {
+func runScanUI(ctx context.Context, cancel context.CancelFunc, opts options, run protoRun, ips []netip.Addr, timeout time.Duration, header, quitHint string, pe *progressEmitter) (phaseResult, error) {
 	var ph phaseResult
 	var scanErr error
-	if err := runWithUI(opts, cancel, opts.tunPingCheck, header, quitHint, pw, func(emit emitter) {
+	if err := runWithUI(opts, cancel, opts.tunPingCheck, header, quitHint, pe, func(emit emitter) {
 		ph, scanErr = runScan(ctx, opts, run, ips, timeout, emit)
 	}); err != nil {
 		return phaseResult{}, err
@@ -477,9 +486,21 @@ func runScanUI(ctx context.Context, cancel context.CancelFunc, opts options, run
 	return ph, scanErr
 }
 
-func runWithUI(opts options, cancel context.CancelFunc, ping bool, header, quitHint string, pw *progressWriter, work func(emitter)) error {
+func runWithUI(opts options, cancel context.CancelFunc, ping bool, header, quitHint string, pe *progressEmitter, work func(emitter)) error {
+	// One progressEmitter for the whole run, not one per call: the scan and the
+	// speed phase share the progress file, and a fresh emitter forgot that the
+	// scan had already finished - so the speed phase was labelled "phase2" again
+	// and the UI could not tell it apart.
+	wrap := func(inner emitter) emitter {
+		if pe == nil {
+			return inner
+		}
+		pe.inner = inner
+		return pe.emit
+	}
+
 	if usePlainOutput(opts) {
-		work(wrapEmitter(pw, plainEmit))
+		work(wrap(plainEmit))
 		return nil
 	}
 
@@ -495,7 +516,7 @@ func runWithUI(opts options, cancel context.CancelFunc, ping bool, header, quitH
 
 	workDone := make(chan struct{})
 	go func() {
-		work(wrapEmitter(pw, p.Send))
+		work(wrap(p.Send))
 		close(workDone)
 	}()
 	if _, err := p.Run(); err != nil {

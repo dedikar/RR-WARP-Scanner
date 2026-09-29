@@ -183,6 +183,16 @@ function esc(s) {
 		.replace(/"/g, '&quot;');
 }
 
+// A checkbox with its caption. LuCI's E() honours only ONE child argument, so
+// E('label', {}, box, 'text') drops both the box and the text. Module scope
+// because several render methods need it (scan form and log controls).
+function chkLabel(box, text) {
+	var l = E('label', {});
+	l.appendChild(box);
+	l.appendChild(document.createTextNode(' ' + text));
+	return l;
+}
+
 function copyText(txt, btn) {
 	var done = function() {
 		if (!btn) return;
@@ -564,15 +574,6 @@ return view.extend({
 			return row;
 		};
 
-		// A checkbox with its caption. E('label', {}, box, 'text') would drop
-		// both the box and the text - LuCI's E() takes a single child argument.
-		var chkLabel = function(box, text) {
-			var l = E('label', {});
-			l.appendChild(box);
-			l.appendChild(document.createTextNode(' ' + text));
-			return l;
-		};
-
 		// --- core params --------------------------------------------------
 		sec.appendChild(f('Хостов на подсеть', num('sample', s.sample, 1, 256, 90, 'адресов на каждую подсеть, 1–256; всего подсетей 14')));
 		sec.appendChild(f('Таймаут (сек)', num('timeout', s.timeout, 1, 30, 70, 'ожидание handshake, 1–30')));
@@ -629,10 +630,10 @@ return view.extend({
 		addSection('Исключить подсети', 'Отмеченные подсети будут пропущены при сканировании.',
 			s.exclude || [], mkChoices(s.subnets || []), 'Исключить подсети...', 3, 'subnets');
 
-		addSection('Исключить узлы (IATA)', 'Эндпоинты, попавшие на отмеченные узлы, будут убраны из результата.',
+		addSection('Исключить узлы', 'Эндпоинты на отмеченных узлах будут убраны из результата. Код узла — IATA-код города, где стоит сервер Cloudflare: ARN — Стокгольм, FRA — Франкфурт, AMS — Амстердам, DME — Москва.',
 			s.exclude_nodes || [], mkChoices(s.nodes || []), 'Исключить узлы...', 4, 'excludeNodes');
 
-		addSection('Только узлы (IATA)', 'Оставить только эндпоинты на отмеченных узлах. Пусто — без ограничения.',
+		addSection('Только узлы', 'Оставить только эндпоинты на отмеченных узлах. Пусто — без ограничения.',
 			s.include_nodes || [], mkChoices(s.nodes || []), 'Только узлы...', 4, 'includeNodes');
 
 		// --- advanced: obfuscation ---------------------------------------
@@ -885,7 +886,8 @@ return view.extend({
 		if (!this.barEl) return;
 		var phaseName = {
 			starting: 'Запуск...', phase1: 'Фаза 1: поиск доступных портов',
-			phase2: 'Фаза 2: проверка туннелей', done: 'Готово', idle: 'Ожидание'
+			phase2: 'Фаза 2: проверка туннелей',
+			speed: 'Тест скорости', done: 'Готово', idle: 'Ожидание'
 		}[st.phase] || st.phase;
 
 		if (st.running) {
@@ -1051,38 +1053,106 @@ return view.extend({
 	},
 
 	renderLog: function() {
+		var self = this;
 		var sec = E('div', { 'class': 'cbi-section' });
 		var det = E('details');
 		det.appendChild(E('summary', { style: 'cursor:pointer' }, 'Логи'));
-		var pre = E('pre', {
-			style: 'max-height:320px;overflow:auto;font-size:11px;white-space:pre-wrap;background:#111;padding:8px;margin-top:8px'
-		}, '...');
-		var clearBtn = E('button', { 'class': 'btn cbi-button', style: 'margin-top:6px' }, 'Очистить');
+
+		// Two sources, two panes. They used to be concatenated into one <pre>:
+		// the engine log is append-only while the rpcd log is separately
+		// rewritten, so a single pane made the top part jump around under a
+		// bottom part that never moved. Side by side, each one only grows.
+		var mkPane = function(title, hint) {
+			var wrap = E('div', { style: 'flex:1 1 48%;min-width:280px' });
+			wrap.appendChild(E('div', { style: 'color:#888;font-size:11px;margin-bottom:4px' },
+				title + (hint ? ' — ' + hint : '')));
+			var pre = E('pre', {
+				style: 'height:260px;overflow:auto;font-size:11px;white-space:pre-wrap;' +
+					'background:#111;padding:8px;margin:0;border:1px solid #333;border-radius:3px'
+			}, '...');
+			wrap.appendChild(pre);
+			return { node: wrap, pre: pre };
+		};
+
+		var panes = E('div', { style: 'display:flex;gap:10px;flex-wrap:wrap;margin-top:8px' });
+		var enginePane = mkPane('Движок', 'ход скана и замера скорости');
+		var rpcPane = mkPane('rpcd', 'что и с какими параметрами запускал бэкенд');
+		panes.appendChild(enginePane.node);
+		panes.appendChild(rpcPane.node);
+		det.appendChild(panes);
+
+		var controls = E('div', { style: 'margin-top:8px;display:flex;align-items:center;gap:14px;flex-wrap:wrap' });
+
+		// Auto-refresh and auto-scroll are separate on purpose: reading back
+		// through a long log while it keeps jumping to the bottom is impossible,
+		// so turning the first off must not force the second.
+		var autoRefreshChk = E('input', { type: 'checkbox' });
+		if (self.logAutoRefresh !== false) autoRefreshChk.checked = true;
+		// chkLabel, not E('label', {}, box, text): LuCI's E() keeps only its first
+		// child, which rendered both switches without their captions.
+		controls.appendChild(chkLabel(autoRefreshChk, 'Автообновление'));
+		controls.lastChild.style.display = 'flex';
+		controls.lastChild.style.alignItems = 'center';
+		controls.lastChild.style.gap = '6px';
+		controls.lastChild.style.cursor = 'pointer';
+
+		var autoScrollChk = E('input', { type: 'checkbox' });
+		if (self.logAutoScroll !== false) autoScrollChk.checked = true;
+		controls.appendChild(chkLabel(autoScrollChk, 'Автопрокрутка'));
+		controls.lastChild.style.display = 'flex';
+		controls.lastChild.style.alignItems = 'center';
+		controls.lastChild.style.gap = '6px';
+		controls.lastChild.style.cursor = 'pointer';
+
+		var clearBtn = E('button', { 'class': 'btn cbi-button', style: 'margin-left:auto' }, 'Очистить');
 		clearBtn.addEventListener('click', function() {
-			callScanLogClear().then(function() { pre.textContent = ''; });
+			callScanLogClear().then(function() {
+				enginePane.pre.textContent = '';
+				rpcPane.pre.textContent = '';
+				self.logSeen = { engine: '', rpc: '' };
+			});
 		});
-		det.appendChild(pre);
-		det.appendChild(clearBtn);
+		controls.appendChild(clearBtn);
+		det.appendChild(controls);
+
 		sec.appendChild(det);
-		this.logEl = pre;
+		this.logPanes = { engine: enginePane.pre, rpc: rpcPane.pre };
+		this.logAutoRefreshChk = autoRefreshChk;
+		this.logAutoScrollChk = autoScrollChk;
+		this.logSeen = { engine: '', rpc: '' };
 		return sec;
+	},
+
+	// Append only what is new to a pane, so the scroll position survives polling.
+	appendLog: function(el, prev, text) {
+		if (text === prev) return prev;
+		var added;
+		if (prev && text.indexOf(prev) === 0) {
+			added = text.slice(prev.length);
+		} else {
+			el.textContent = text;
+			added = null;
+		}
+		if (added) el.textContent += added;
+		if (this.logAutoScrollChk && this.logAutoScrollChk.checked) {
+			el.scrollTop = el.scrollHeight;
+		}
+		return text;
 	},
 
 	startLogAutoRefresh: function() {
 		var self = this;
-		var last = '';
 		var tick = function() {
-			// Only grow the log while the tab is visible: a background tab polling
-			// every 3s is wasted rpc load on a 2-core router.
-			if (document.visibilityState === 'visible') {
+			// Only while visible and only when asked: a background tab polling a
+			// 2-core router every 3s is wasted work.
+			if (document.visibilityState === 'visible' &&
+			    self.logAutoRefreshChk && self.logAutoRefreshChk.checked) {
 				callScanLog().then(function(l) {
-					if (!l) return;
-					var txt = (l.rrwg || '') + (l.rpc ? '\n--- rpcd ---\n' + l.rpc : '');
-					if (txt !== last && self.logEl) {
-						last = txt;
-						self.logEl.textContent = txt;
-						self.logEl.scrollTop = self.logEl.scrollHeight;
-					}
+					if (!l || !self.logPanes) return;
+					self.logSeen.engine = self.appendLog(
+						self.logPanes.engine, self.logSeen.engine, l.rrwg || '');
+					self.logSeen.rpc = self.appendLog(
+						self.logPanes.rpc, self.logSeen.rpc, l.rpc || '');
 				});
 			}
 			window.setTimeout(tick, 3000);
