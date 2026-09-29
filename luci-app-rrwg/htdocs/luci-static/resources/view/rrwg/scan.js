@@ -63,13 +63,19 @@ var callGetSettings   = declare({ object: 'luci.rrwg', method: 'getSettings', pa
 // than through L.rpc.call. On this build the framework wrapper answered 200 with
 // an empty body and never reached rpcd, so every save looked successful and
 // changed nothing; the direct POST is verified to work against the router.
+// Monotonic request id. Date.now() was used before, and three pollers run at
+// once (status every 2s, both logs every 3s), so two requests could leave in the
+// same millisecond carrying the same id - JSON-RPC cannot tell such replies
+// apart, and a caller could be handed the other one's answer.
+var __rpcSeq = 0;
+
 function ubusCall(object, method, params) {
 	var sid = (L.env && L.env.sessionid) || '';
 	return fetch('/ubus/', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({
-			jsonrpc: '2.0', id: Date.now(),
+			jsonrpc: '2.0', id: ++__rpcSeq,
 			method: 'call', params: [sid, object, method, params || {}]
 		})
 	}).then(function(res) {

@@ -294,10 +294,14 @@ func measureSpeed(ctx context.Context, ph phaseResult, timeout time.Duration, sp
 	defer closeAfterDrain(tn)
 
 	speeds := make(map[string]float64, len(picks))
-	for _, p := range picks {
+	for i, p := range picks {
 		if ctx.Err() != nil {
 			break
 		}
+		// Progress line before each measurement, not after: a download takes
+		// seconds, and without this the speed phase looked like a stall - the log
+		// showed nothing while the engine was busy.
+		fmt.Fprintf(os.Stderr, "Speedtest %d/%d: %s\n", i+1, len(picks), p.endpoint)
 		speeds[p.endpoint] = endpointSpeed(ctx, tn, p.endpoint, timeout)
 		emit(speedMsg{endpoint: p.endpoint, mbps: speeds[p.endpoint]})
 		emit(probedMsg{})
