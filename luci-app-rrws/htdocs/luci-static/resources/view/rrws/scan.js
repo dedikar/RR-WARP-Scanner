@@ -191,6 +191,47 @@ function injectPageCss() {
 		'.rrws-disclosure[open] > summary::before { transform: rotate(90deg); }',
 		'.rrws-disclosure[open] > summary { margin-bottom: 8px; }',
 		'.rrws-disclosure[open] > summary { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }',
+		// Result cards. They used to be an inline #2228 on the panel's own dark
+		// grey: two near-identical greys stacked, so with 141 results the list
+		// read as one undifferentiated slab and the only separation came from a
+		// 4px left stripe - which is #444 on every card that is not best or torn.
+		// A card now has its own visible edge and a surface that is actually
+		// lighter than the panel it sits on.
+		'.rrws-card {',
+		'  border-left: 4px solid #444;',
+		'  border-top: 1px solid var(--border-color-low, rgba(128,128,128,.35));',
+		'  border-right: 1px solid var(--border-color-low, rgba(128,128,128,.35));',
+		'  border-bottom: 1px solid var(--border-color-low, rgba(128,128,128,.35));',
+		'  border-radius: 4px;',
+		'  padding: 8px 10px;',
+		'  margin: 6px 0;',
+		'}',
+		'html[data-darkmode="true"] .rrws-card {',
+		// .14, not .07: at .07 the card surface measured only 1.23:1 against the
+		// panel behind it (45,49,57 on 29,34,42), so the separation came almost
+		// entirely from the 1px edge and the fill did nothing. .14 lands the
+		// ratio near 1.5:1, which is visible as a surface rather than as an outline.
+		'  background: rgba(255, 255, 255, .14);',
+		'  border-top-color: rgba(255, 255, 255, .26);',
+		'  border-right-color: rgba(255, 255, 255, .26);',
+		'  border-bottom-color: rgba(255, 255, 255, .26);',
+		'}',
+		// Light theme needs the opposite: a surface darker than the panel, or the
+		// card vanishes the way the old panels did on a light background. .07 was
+		// too little there - the panel is already near-white, so the card only
+		// reached 1.17:1. .12 brings it in line with the dark theme's 1.56.
+		'html:not([data-darkmode="true"]) .rrws-card {',
+		'  background: rgba(0, 0, 0, .12);',
+		'  border-top-color: rgba(0, 0, 0, .3);',
+		'  border-right-color: rgba(0, 0, 0, .3);',
+		'  border-bottom-color: rgba(0, 0, 0, .3);',
+		'}',
+		'.rrws-card-best { border-left-color: #16a34a; }',
+		'.rrws-card-torn { border-left-color: #b91c1c; opacity: .65; }',
+		// The metadata line needs to stay legible on both surfaces, so it gets a
+		// theme-aware colour instead of the fixed #aaa that assumed dark.
+		'.rrws-card-meta { font-size: 12px; margin-top: 3px; color: var(--text-color-medium, #666); }',
+		'html[data-darkmode="true"] .rrws-card-meta { color: #b4b4b4; }',
 	].join('\n');
 
 	var el = document.createElement('style');
@@ -344,18 +385,18 @@ function tgBadge(r) {
 	if (!r.tg_seen) return E('span', { style: 'color:#888' }, '—');
 	if (r.tg_ok) {
 		return E('span', {
-			style: 'background:#0b6b2f;color:#fff;padding:1px 6px;border-radius:3px;font-weight:600',
+			style: 'background:#16a34a;color:#fff;padding:1px 6px;border-radius:3px;font-weight:600',
 			title: 'Все ' + (r.tg_total || TG_TOTAL) + ' дата-центров Telegram ответили'
 		}, 'TG ' + (r.tg_dcs || 0) + '/' + (r.tg_total || TG_TOTAL));
 	}
 	if (r.tg_dcs > 0) {
 		return E('span', {
-			style: 'background:#8a6d00;color:#fff;padding:1px 6px;border-radius:3px',
+			style: 'background:#b45309;color:#fff;padding:1px 6px;border-radius:3px',
 			title: 'Отвечают не все ДЦ: часть аккаунтов Telegram не подключится'
 		}, 'TG ' + r.tg_dcs + '/' + (r.tg_total || TG_TOTAL));
 	}
 	return E('span', {
-		style: 'background:#8b1a1a;color:#fff;padding:1px 6px;border-radius:3px',
+		style: 'background:#b91c1c;color:#fff;padding:1px 6px;border-radius:3px',
 		title: 'Ни один ДЦ Telegram не ответил через этот эндпоинт'
 	}, 'TG blocked');
 }
@@ -409,8 +450,8 @@ return view.extend({
 		var accStatusLabel = E('span', {
 			'class': 'label',
 			style: acct.registered
-				? 'background:#0b6b2f;color:#fff;padding:2px 8px;border-radius:3px;font-weight:600'
-				: 'background:#8b1a1a;color:#fff;padding:2px 8px;border-radius:3px;font-weight:600'
+				? 'background:#16a34a;color:#fff;padding:2px 8px;border-radius:3px;font-weight:600'
+				: 'background:#b91c1c;color:#fff;padding:2px 8px;border-radius:3px;font-weight:600'
 		}, acct.registered ? 'ЗАРЕГИСТРИРОВАН' : 'НЕ ЗАРЕГИСТРИРОВАН');
 
 		headerEl.appendChild(E('h2', {}, 'RR WARP Scanner'));
@@ -577,7 +618,7 @@ return view.extend({
 		}
 		sec.appendChild(btns);
 
-		var regStatus = E('div', { style: 'margin-top:8px;color:#aaa' });
+		var regStatus = E('div', { style: 'margin-top:8px;color:var(--text-color-medium, #888)' });
 		sec.appendChild(regStatus);
 		this.regStatusEl = regStatus;
 		return sec;
@@ -1102,20 +1143,20 @@ return view.extend({
 
 		sorted.forEach(function(r, i) {
 			var isBest = (i === bestIdx);
-			var border = r.torn ? '#8b1a1a' : (isBest ? '#0b6b2f' : '#444');
-			var row = E('div', {
-				style: 'border-left:4px solid ' + border + ';padding:8px 10px;margin:6px 0;background:#2228;' +
-					(r.torn ? 'opacity:.65' : '')
-			});
+			// The left stripe carries the meaning (best / torn / plain) and the rest
+			// of the card's surface comes from the .rrws-card rules, so the list
+			// stays readable at 141 entries instead of turning into one grey slab.
+			var cls = 'rrws-card' + (r.torn ? ' rrws-card-torn' : (isBest ? ' rrws-card-best' : ''));
+			var row = E('div', { 'class': cls });
 
 			var line1 = E('div', { style: 'display:flex;align-items:center;gap:10px;flex-wrap:wrap' });
 			line1.appendChild(E('code', { style: 'font-size:14px' }, r.endpoint));
 			line1.appendChild(tgBadge(r));
 			if (isBest) line1.appendChild(E('span', {
-				style: 'background:#0b6b2f;color:#fff;padding:1px 6px;border-radius:3px;font-weight:600'
+				style: 'background:#16a34a;color:#fff;padding:1px 6px;border-radius:3px;font-weight:600'
 			}, 'ЛУЧШИЙ'));
 			if (r.torn) line1.appendChild(E('span', {
-				style: 'background:#8b1a1a;color:#fff;padding:1px 6px;border-radius:3px',
+				style: 'background:#b91c1c;color:#fff;padding:1px 6px;border-radius:3px',
 				title: 'DPI обрывает туннель — данные через него не идут'
 			}, 'ОБРЫВ'));
 			if (r.loss_pct > 0) line1.appendChild(E('span', { style: 'color:#e8a' }, 'потери ' + r.loss_pct + '%'));
@@ -1130,7 +1171,7 @@ return view.extend({
 			// speed_measured tells "not tested" from "tested, got nothing": a
 			// failed measurement is a real datum, not a missing one.
 			if (r.speed_measured) parts.push('скорость ' + r.speed_mbps.toFixed(1) + ' Мбит/с');
-			row.appendChild(E('div', { style: 'color:#aaa;font-size:12px;margin-top:3px' }, parts.join(' • ')));
+			row.appendChild(E('div', { 'class': 'rrws-card-meta' }, parts.join(' • ')));
 
 			var actions = E('div', { style: 'margin-top:6px' });
 			var cpBtn = E('button', { 'class': 'btn cbi-button cbi-button-action', style: 'font-size:12px' }, 'Скопировать .conf');
