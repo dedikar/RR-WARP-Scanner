@@ -28,6 +28,9 @@ type options struct {
 	output         string
 	conf           string
 	confType       string
+	bestBy         string
+	sweepPorts     string
+	pingTarget     string
 	dns            string
 	proxy          string
 	relay          string
@@ -54,22 +57,22 @@ type options struct {
 	noDNS          bool
 	i1Explicit     bool
 	tunPingCheck   bool
-	jsonOut        bool
-	progressFile   string
 	speed          bool
 	// speedTop caps how many endpoints the speed phase measures. 0 keeps the
 	// upstream behaviour (every endpoint the tables pick), which on a full pool
 	// run means dozens of multi-second downloads - far too long for a router page
 	// the user is watching.
-	speedTop int
-	tg       bool
-	tgOnly   bool
-	genJunk  bool
-	wantMeta bool
-	ipv6     bool
-	full     bool
-	plain    bool
-	emoji    bool
+	speedTop     int
+	tg           bool
+	tgOnly       bool
+	jsonOut      bool
+	progressFile string
+	genJunk      bool
+	wantMeta     bool
+	ipv6         bool
+	full         bool
+	plain        bool
+	emoji        bool
 }
 
 type flagSpec struct {
@@ -96,15 +99,16 @@ var (
 	scanGroup = flagGroup{"Scan tuning", append([]flagSpec{
 		{"jt", "tunnel-jobs", "N", "phase 2 tunnel workers"},
 		{"P", "tun-ping", "", fmt.Sprintf("add the TUN PING/LOSS columns: RTT and packet loss measured inside the tunnel to %s, and flag endpoints DPI tears down mid-stream; off by default for speed", pingTarget)},
+		{"", "ping-target", "ADDR", fmt.Sprintf("IP address or hostname the TUN PING/LOSS columns measure to, resolved inside the tunnel (default %s); needs -tun-ping", pingTarget)},
 		{"", "tun-ping-count", "N", fmt.Sprintf("echoes per durability burst, %dms apart - a longer burst catches tunnels DPI kills late (default %d, implies -tun-ping)", pingInterval.Milliseconds(), durabilityPings)},
 		{"", "speed", "", "add the SPEED column: after the scan, download-test every endpoint the tables pick, one at a time (slow, and it does not change the ranking)"},
 		{"", "speed-top", "N", "-speed measures only this many endpoints, taken from the top of the table order; 0 measures every endpoint the tables pick"},
 		{"", "tg", "", "add the TG column: dial Telegram's MTProto data centres through each tunnel and report the round-trip to the nearest one, or \"blocked\" when none answer; endpoints that reach Telegram then rank above those that do not"},
+		{"", "tg-only", "", "keep only endpoints that reached Telegram (implies -tg)"},
 		{"n", "sample", "N", "addresses to sample per subnet"},
 		{"f", "full", "", "scan all 256 addresses per subnet (overrides -sample)"},
 		{"", "port", "N", "probe only this port on every endpoint instead of picking the first reachable one (skips phase 1)"},
-		{"", "json", "", "write the result as JSON on stdout instead of the human tables (for the LuCI front end)"},
-		{"", "progress", "FILE", "write live progress to FILE for a polling front end (phaseN:done:total / done)"},
+		{"", "sweep-ports", "open|all", fmt.Sprintf("report every port of an endpoint as its own result instead of keeping the first that answers: %s sweeps the ports phase 1 found, %s sweeps every known WARP port and skips phase 1 (slow - meant for -target)", sweepOpen, sweepAll)},
 	}, netSpecs...)}
 
 	nestGroup = flagGroup{"WARP-in-WARP", []flagSpec{
@@ -135,7 +139,7 @@ var (
 		{"o", "output", "FILE", "full per-endpoint report file (default warpscout-report-<timestamp>.txt)"},
 		{"", "no-report", "", "skip the report file entirely (overrides -o)"},
 		{"", "conf", "FILE", "write a ready-to-import config for the best endpoint (\"-\" prints it instead)"},
-		{"", "conf-type", "KIND", "format of -conf: native (wg/awg .conf, usque config.json) or mihomo"},
+		{"", "conf-type", "KIND", "format of -conf: native (wg/awg .conf, usque config.json), mihomo or mihomo-json"},
 		{"", "table-off", "", "add \"Table = off\" to the generated config: bring the interface up without touching routes"},
 		{"", "mtu", "N", "set MTU in the generated config (default: leave the line out)"},
 		{"", "dns", "LIST", "DNS servers in the generated config: comma-separated (default: Cloudflare, following -6)"},
@@ -144,8 +148,8 @@ var (
 		{"", "country", "ISO", "keep only endpoints whose edge node sits in these countries: comma-separated ISO codes"},
 		{"", "exclude-node", "COLO", "drop endpoints landing on these edge nodes: comma-separated IATA codes"},
 		{"", "exclude-country", "ISO", "drop endpoints whose edge node sits in these countries: comma-separated ISO codes"},
-		{"", "tg-only", "", "keep only endpoints that reached Telegram (implies -tg)"},
 		{"", "best", "", "print just the best endpoint as ip:port on stdout (for scripts and pipes)"},
+		{"", "best-by", "ping|speed", "what makes an endpoint best, both for -best/-conf and for the order of every table: lowest ping (default) or highest download speed (runs the -speed phase, so it takes much longer)"},
 		{"", "plain", "", "force plain line output (no live TUI)"},
 		{"", "emoji", "", "prefix the colo region with a country flag emoji (rendering depends on the terminal)"},
 	}}
@@ -259,7 +263,9 @@ func setupScanFlags(fs *flag.FlagSet, o *options) {
 	intFlag(fs, &o.tunnelParallel, defaultTunnelJobs, "jt", "tunnel-jobs")
 	intFlagValidate(fs, &o.perSubnet, 5, "n", "sample", validateSample)
 	fs.IntVar(&o.port, "port", 0, "")
-	strFlag(fs, &o.proto, defaultProto, "p", "proto")
+	fs.StringVar(&o.sweepPorts, "sweep-ports", "", "")
+	fs.StringVar(&o.pingTarget, "ping-target", "", "")
+	strFlag(fs, &o.proto, protoWG, "p", "proto")
 	strFlag(fs, &o.output, "", "o", "output")
 	fs.BoolVar(&o.noReport, "no-report", false, "")
 	boolFlag(fs, &o.tunPingCheck, "P", "tun-ping")
@@ -268,12 +274,15 @@ func setupScanFlags(fs *flag.FlagSet, o *options) {
 	fs.IntVar(&o.speedTop, "speed-top", 0, "")
 	fs.BoolVar(&o.tg, "tg", false, "")
 	fs.BoolVar(&o.tgOnly, "tg-only", false, "")
+	fs.BoolVar(&o.jsonOut, "json", false, "")
+	fs.StringVar(&o.progressFile, "progress", "", "")
 	boolFlag(fs, &o.full, "f", "full")
 	fs.StringVar(&o.node, "node", "", "")
 	fs.StringVar(&o.country, "country", "", "")
 	fs.StringVar(&o.excludeNode, "exclude-node", "", "")
 	fs.StringVar(&o.excludeCountry, "exclude-country", "", "")
 	fs.BoolVar(&o.best, "best", false, "")
+	fs.StringVar(&o.bestBy, "best-by", bestKeyPing, "")
 	fs.StringVar(&o.conf, "conf", "", "")
 	fs.StringVar(&o.confType, "conf-type", confTypeNative, "")
 	fs.StringVar(&masqueSNI, "masque-sni", masqueDefaultSNI, "")
@@ -286,8 +295,6 @@ func setupScanFlags(fs *flag.FlagSet, o *options) {
 	fs.BoolVar(&o.noDNS, "no-dns", false, "")
 	fs.BoolVar(&o.plain, "plain", false, "")
 	fs.BoolVar(&o.emoji, "emoji", false, "")
-	fs.BoolVar(&o.jsonOut, "json", false, "")
-	fs.StringVar(&o.progressFile, "progress", "", "")
 	o.wantMeta = true
 }
 
@@ -333,7 +340,7 @@ func setupSocksFlags(fs *flag.FlagSet, o *options) {
 	strFlag(fs, &o.endpoint, "", "e", "endpoint")
 	strFlag(fs, &o.listen, defaultSocksListen, "l", "listen")
 	intFlag(fs, &o.port, defaultSocksPort, "P", "port")
-	strFlag(fs, &o.proto, defaultProto, "p", "proto")
+	strFlag(fs, &o.proto, protoWG, "p", "proto")
 	addAWGFlags(fs, o)
 	fs.StringVar(&masqueSNI, "masque-sni", masqueDefaultSNI, "")
 	fs.IntVar(&masqueAttempts, "masque-attempts", masqueDefaultAttempts, "")
@@ -397,6 +404,9 @@ func applyCommonFlags(fs *flag.FlagSet, o *options) {
 	validateJunkParams()
 	validateMTU(*o)
 	validateConfType(*o)
+	validateSweepPorts(*o)
+	applyPingTarget(*o)
+	validateBestBy(o)
 	rejectBestConfStdout(*o)
 	applyDNS(o)
 	applyTarget(o)
@@ -571,6 +581,61 @@ func rejectBestConfStdout(o options) {
 	}
 }
 
+func validateBestBy(o *options) {
+	if o.bestBy == "" {
+		return
+	}
+	if !slices.Contains(bestKeys, o.bestBy) {
+		fmt.Fprintf(os.Stderr, "-best-by %q must be one of %s\n", o.bestBy, strings.Join(bestKeys, ", "))
+		os.Exit(2)
+	}
+	bestBy = o.bestBy
+}
+
+// -port pins a single port, and MASQUE already reports one result per port, so
+// neither combination has anything left to sweep.
+func validateSweepPorts(o options) {
+	if o.sweepPorts == "" {
+		return
+	}
+	if !slices.Contains(sweepModes, o.sweepPorts) {
+		fmt.Fprintf(os.Stderr, "-sweep-ports %q must be one of %s\n", o.sweepPorts, strings.Join(sweepModes, ", "))
+		os.Exit(2)
+	}
+	if o.port != 0 {
+		fmt.Fprintln(os.Stderr, "-sweep-ports and -port contradict each other: -port pins a single port")
+		os.Exit(2)
+	}
+	if o.proto == protoMASQUE || o.proto == protoMASQUEH2 {
+		fmt.Fprintf(os.Stderr, "-sweep-ports does not apply to -proto %s: every MASQUE port is already its own result\n", o.proto)
+		os.Exit(2)
+	}
+	sweepingPorts = true
+}
+
+// A hostname is allowed and resolved inside the tunnel (pingDst), never on the
+// host: a local resolver can answer with an address that only routes outside the
+// tunnel - on a fake-IP resolver every answer is one. A port or a URL is a
+// mistake, the burst speaks ICMP.
+func applyPingTarget(o options) {
+	if o.pingTarget == "" {
+		return
+	}
+	if !o.tunPingCheck && o.tunPingCount <= 0 {
+		fmt.Fprintln(os.Stderr, "-ping-target needs -tun-ping")
+		os.Exit(2)
+	}
+	if addr, err := netip.ParseAddr(o.pingTarget); err == nil {
+		pingTarget = addr.String()
+		return
+	}
+	if strings.ContainsAny(o.pingTarget, ":/ ") {
+		fmt.Fprintf(os.Stderr, "-ping-target %q must be an IP address or a hostname\n", o.pingTarget)
+		os.Exit(2)
+	}
+	pingTarget = o.pingTarget
+}
+
 func validateConfType(o options) {
 	if o.confType == "" {
 		return
@@ -583,8 +648,8 @@ func validateConfType(o options) {
 		fmt.Fprintln(os.Stderr, "-conf-type needs -conf FILE")
 		os.Exit(2)
 	}
-	if o.tableOff && o.confType == confTypeMihomo {
-		fmt.Fprintln(os.Stderr, "-table-off does not apply to -conf-type mihomo: the client owns the routes")
+	if o.tableOff && isMihomo(o.confType) {
+		fmt.Fprintf(os.Stderr, "-table-off does not apply to -conf-type %s: the client owns the routes\n", o.confType)
 		os.Exit(2)
 	}
 }

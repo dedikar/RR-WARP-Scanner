@@ -1,43 +1,37 @@
 # Upstream record
 
-- **Base:** https://github.com/vernette/warpscout (branch `master`) — active project
-- **Forked through:** https://github.com/niklzz/warpscout-tg, commit `3ad3a643dc8410bc0724fd6dee6c9b4feb754afc`, 2026-09-03
+- **Base:** https://github.com/vernette/warpscout (branch `master`) - **this is now the base**
+- **Telegram from:** https://github.com/niklzz/warpscout-tg - one file, `telegram.go`
 - **License:** MIT (see `LICENSE`)
 
-## What came from where
+## Moved onto the base (2026-09-30)
 
-Verified by diffing this tree against `vernette/warpscout@master` on 2026-09-30. The
-only files here that upstream does not have:
+The tree was rebuilt from `vernette/warpscout@master` instead of the `-tg` fork. The
+fork may be abandoned while the base keeps moving, and a fork that cannot be merged
+from is a dead end: new upstream features would never reach this package.
+
+The move was cheap because the two trees barely differ. Carried over:
 
 | File | Origin |
 |---|---|
-| `telegram.go` | the `warpscout-tg` fork — its one useful addition |
-| `jsonout.go` (+ `_test.go`) | ours — machine-readable JSON report (`-json`) for the ubus backend |
-| `progress.go` | ours — atomic progress file (`-progress`) the LuCI page polls |
-| `timestamps.go` (+ `_test.go`) | ours — timestamps on engine log lines |
+| `telegram.go` | the `-tg` fork - its one useful addition |
+| `jsonout.go` (+ test) | ours - JSON report (`-json`) for the ubus backend |
+| `progress.go` | ours - progress file (`-progress`) the LuCI page polls |
+| `timestamps.go` (+ test) | ours - timestamps on every engine log line |
 
-Everything else is upstream's, including `masque.go`, `findsni.go`, `findjunk.go`,
-`nest.go`, `socks.go` and `tui.go`. Do not attribute those to the fork: they exist in
-the base, and saying otherwise once led to the wrong conclusion that moving onto the
-base would be expensive.
-
-## Pending: move onto the base
-
-`warpscout-tg` may be abandoned while `vernette/warpscout` keeps moving, which would
-strand us on a dead branch. The move is measured, not estimated: copy the four files
-above, repeat the edits listed below, build, run the acceptance test. Hours, not days
-— the two trees are otherwise identical.
-
-## Local changes
+And these edits, each carrying a comment at the site:
 
 | File | Change |
 |---|---|
-| `jsonout.go` | **new** — machine-readable JSON report (`-json`) for the ubus backend |
-| `progress.go` | **new** — atomic progress file (`-progress`) the LuCI page polls |
-| `timestamps.go` | **new** — prefix every engine log line with a local timestamp |
-| `flags.go` | `-json`, `-progress` flags; `-p` default now `defaultProto` |
-| `main.go` | `runScanCmd`: JSON/progress wiring, `runScanUI`/`runWithUI` take a `*progressEmitter` |
-| `warp.go` | `defaultProto = protoAWG` (see comment there — measured, not stylistic) |
+| `warp.go` | `defaultProto = protoAWG` - measured, see below |
+| `flags.go` | `-json`, `-progress`, `-speed-top`, `-tg`, `-tg-only`; `-tg-only` implies `-tg` |
+| `report.go` | Telegram fields on `endpointResult`; Telegram outranks loss/ping in `lessByLossRTT`; `filterByTelegram`; the TG column helpers |
+| `main.go` | progress emitter wiring; JSON emitted AFTER the speed phase; Telegram probe in the scan loop; `-tg-only` in `filtered()` and `applyFilters()`; `tgSort` |
+| `tui.go` | the TG column in the live feed |
+| `findjunk.go`, `findsni.go` | pass `nil` for the new progress emitter argument |
+
+**What the move bought:** `-sweep-ports`, `-ping-target`, `-best-by` and mihomo config
+output, all of which the base had gained since the fork was taken.
 
 ## The `-p awg` default
 

@@ -496,11 +496,11 @@ func (m scanModel) renderFeed(limit int) string {
 	if m.ping {
 		tunHead = pad("TUN PING", 9) + " " + pad("LOSS", 6) + " "
 	}
+	var b strings.Builder
 	tgHead := ""
 	if m.tg {
 		tgHead = pad("TG", 9) + " "
 	}
-	var b strings.Builder
 	b.WriteString(st.dim.Render(pad("ENDPOINT", 22)+" "+pad("ENDPOINT PING", 13)+" "+tunHead+tgHead+pad("SEEN AS", 10)+" NODE") + "\n")
 	for _, r := range rows {
 		ep := pad(r.endpoint, 22)

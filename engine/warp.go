@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/netip"
+	"slices"
 	"strings"
 )
 
@@ -54,6 +55,16 @@ const (
 	junkCountLimitMax = 128
 )
 
+
+// The router build defaults to AmneziaWG, not plain WireGuard. Measured on the
+// target network (RouteRich, 2026-09-29): "-p wg" brought up handshakes that then
+// passed no data at all - every endpoint came back torn with 90-100% loss and no
+// Telegram DC answered, which is exactly the DPI teardown the obfuscation exists
+// to defeat. The same /24 under "-p awg" gave 12/12 working, 4 of them reaching
+// all five Telegram DCs. Upstream keeps "wg" as its default because it targets
+// unrestricted hosts; here it would mean shipping an app that finds nothing.
+const defaultProto = protoAWG
+
 const (
 	junkCountMin = 4
 	junkCountMax = 6
@@ -88,6 +99,19 @@ var (
 	}
 	warpPorts = primaryWarpPorts
 )
+
+// -sweep-ports: "open" keeps phase 1 and sweeps the ports it found, "all" skips
+// phase 1 and sweeps every port warpscout knows about.
+const (
+	sweepOpen = "open"
+	sweepAll  = "all"
+)
+
+var sweepModes = []string{sweepOpen, sweepAll}
+
+func allWarpPorts() []int {
+	return append(slices.Clone(primaryWarpPorts), extendedWarpPorts...)
+}
 
 func base64ToHex(b64 string) (string, error) {
 	raw, err := base64.StdEncoding.DecodeString(b64)
@@ -152,15 +176,6 @@ const (
 	protoMASQUE   = "masque"
 	protoMASQUEH2 = "masque-h2"
 )
-
-// The router build defaults to AmneziaWG, not plain WireGuard. Measured on the
-// target network (RouteRich, 2026-09-29): "-p wg" brought up handshakes that then
-// passed no data at all - every endpoint came back torn with 90-100% loss and no
-// Telegram DC answered, which is exactly the DPI teardown the obfuscation exists
-// to defeat. The same /24 under "-p awg" gave 12/12 working, 4 of them reaching
-// all five Telegram DCs. Upstream keeps "wg" as its default because it targets
-// unrestricted hosts; here it would mean shipping an app that finds nothing.
-const defaultProto = protoAWG
 
 func (r protoRun) isAWG() bool { return r.kind == kindAWG }
 

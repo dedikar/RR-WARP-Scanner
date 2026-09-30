@@ -129,75 +129,24 @@ func speedHeaders(show bool) []string {
 	return []string{"SPEED"}
 }
 
-// Keyed off "was it checked" rather than "did it work": a scan where Telegram is
-// blocked everywhere is exactly when the column has something to say.
-func anyTG(results []endpointResult) bool {
-	for _, r := range results {
-		if r.tgSeen {
-			return true
-		}
+func sortNote(ping bool) string {
+	if bestBy == bestKeySpeed {
+		return "sorted by download speed"
 	}
-	return false
-}
-
-func tgStr(r endpointResult) string {
-	switch {
-	case !r.tgSeen:
-		return "-"
-	case !r.tgOK:
-		return tgPartialStr(r.tgDCs)
-	}
-	return latencyStr(r.tg)
-}
-
-func tgField(s string, show bool) string {
-	if !show {
-		return ""
-	}
-	return fmt.Sprintf("%-9s ", s)
-}
-
-func tgCells(r endpointResult, show bool) []string {
-	if !show {
-		return nil
-	}
-	return []string{tgStr(r)}
-}
-
-func tgHeaders(show bool) []string {
-	if !show {
-		return nil
-	}
-	return []string{"TG"}
-}
-
-// -tg outranks every latency metric, so both notes say so: otherwise a slower
-// top row reads as a sorting bug.
-func sortNote(ping, tg bool) string {
-	if tg && tgSort {
-		return "sorted by Telegram RTT (-tg-only), then " + rankNote(ping)
-	}
-	if tg {
-		return "sorted by Telegram reachability first, then " + rankNote(ping)
-	}
-	return "sorted by " + rankNote(ping)
-}
-
-func bestNote(ping, tg bool) string {
-	if tg && tgSort {
-		return "lowest Telegram RTT, then lowest " + rankNote(ping)
-	}
-	if tg {
-		return "Telegram reachable first, then lowest " + rankNote(ping)
-	}
-	return "lowest " + rankNote(ping)
-}
-
-func rankNote(ping bool) string {
 	if ping {
-		return "in-tunnel loss, then in-tunnel ping"
+		return "sorted by in-tunnel loss, then in-tunnel ping"
 	}
-	return "ping to the endpoint"
+	return "sorted by ping to the endpoint"
+}
+
+func bestNote(ping bool) string {
+	if bestBy == bestKeySpeed {
+		return "highest download speed"
+	}
+	if ping {
+		return "lowest in-tunnel loss, then in-tunnel ping"
+	}
+	return "lowest ping to the endpoint"
 }
 
 func latencyStr(d time.Duration) string {
@@ -272,10 +221,6 @@ func filterByCountry(ph phaseResult, countries []string, want bool) phaseResult 
 	})
 }
 
-func filterByTelegram(ph phaseResult) phaseResult {
-	return filterResults(ph, func(r endpointResult) bool { return r.tgOK })
-}
-
 func upperSet(vals []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(vals))
 	for _, v := range vals {
@@ -313,23 +258,29 @@ func filterSorted(results []endpointResult, keep func(endpointResult) bool) []en
 	return out
 }
 
-// Under -tg-only every survivor reached Telegram, so reachability alone stops
-// ordering anything - the Telegram RTT takes over as the ranking metric.
-// Set once in setupScan, like the rest of the flag globals.
-var tgSort bool
+const (
+	bestKeyPing  = "ping"
+	bestKeySpeed = "speed"
+)
+
+var bestKeys = []string{bestKeyPing, bestKeySpeed}
+
+var bestBy = bestKeyPing
 
 // Loss before ping, mirroring CloudflareWarpSpeedTest. Unmeasured endpoints
 // carry loss 0, so without -tun-ping this degrades to ping-only ordering.
-//
-// Telegram outranks both: a fast endpoint that cannot reach it is useless to
-// whoever asked for -tg. Without the flag every result carries tgOK false, so
-// the ordering stays exactly what it was.
 func lessByLossRTT(a, b endpointResult) bool {
+	// Telegram outranks both: a fast endpoint that cannot reach it is useless to
+	// whoever asked for -tg. Without -tg every result carries tgOK false, so the
+	// ordering stays exactly what it was.
 	if a.tgOK != b.tgOK {
 		return a.tgOK
 	}
 	if tgSort && a.tgOK && a.tg != b.tg {
 		return a.tg < b.tg
+	}
+	if bestBy == bestKeySpeed && a.speed != b.speed {
+		return a.speed > b.speed // unmeasured is 0, so it sinks
 	}
 	if a.loss != b.loss {
 		return a.loss < b.loss
@@ -364,14 +315,19 @@ func bestByPing(picks []endpointResult) endpointResult {
 	return best
 }
 
+// tgSort ranks by Telegram round-trip once the endpoint is Telegram-capable.
+// Set from -tg-only: someone who asked for Telegram-only results wants those
+// ranked by how fast Telegram answers through them.
+var tgSort bool
+
 const (
-	reportRowFmt   = "%-22s %-13s %s%s%s%-10s %-6s %s\n"
-	nodePickRowFmt = "%-6s %-22s %-13s %s%s%s%-10s %s\n"
+	reportRowFmt   = "%-22s %-13s %s%s%-10s %-6s %s\n"
+	nodePickRowFmt = "%-6s %-22s %-13s %s%s%-10s %s\n"
 )
 
-func writeHeader(w io.Writer, working, probed int, ping, speed, tg bool) {
+func writeHeader(w io.Writer, working, probed int, ping, speed bool) {
 	fmt.Fprintf(w, "# WARP endpoints: %d working / %d probed\n", working, probed)
-	fmt.Fprintf(w, "# %s\n", sortNote(ping, tg))
+	fmt.Fprintf(w, "# %s\n", sortNote(ping))
 	if outer != nil {
 		fmt.Fprintf(w, "# Scanned from inside a tunnel to %s - every endpoint here exits through that node's region\n", outer.label)
 		fmt.Fprintln(w, "# ENDPOINT PING = ICMP from inside that tunnel to the endpoint, so it carries the outer hop too")
@@ -379,13 +335,14 @@ func writeHeader(w io.Writer, working, probed int, ping, speed, tg bool) {
 		fmt.Fprintln(w, "# ENDPOINT PING = ICMP ping to the endpoint address from this host, no tunnel involved")
 	}
 	if ping {
-		fmt.Fprintf(w, "# TUN PING / LOSS = RTT and packet loss measured inside the tunnel, to %s\n", pingTarget)
+		fmt.Fprintf(w, "# TUN PING / LOSS = RTT and packet loss measured inside the tunnel, to %s\n", pingTargetLabel())
 	}
 	if speed {
-		fmt.Fprintln(w, "# SPEED = download throughput measured inside the tunnel; the ordering does not depend on it")
-	}
-	if tg {
-		fmt.Fprintln(w, "# TG = MTProto round-trip to the slowest of the 5 Telegram DCs, dialled inside the tunnel; \"3/5\" = only some DCs answered, \"blocked\" = none did")
+		note := "the ordering does not depend on it"
+		if bestBy == bestKeySpeed {
+			note = "only the endpoints the tables pick are measured, so the rest sort last"
+		}
+		fmt.Fprintf(w, "# SPEED = download throughput measured inside the tunnel; %s\n", note)
 	}
 	fmt.Fprintln(w, "# SEEN AS = region external services see through the tunnel")
 	fmt.Fprintln(w, "# NODE / NODE LOCATION = Cloudflare WARP edge node the tunnel landed on, and where it sits")
@@ -396,8 +353,7 @@ func writeFullReport(w io.Writer, results []endpointResult, ping bool) {
 	working := workingSorted(results)
 	torn := tornSorted(results)
 	speed := anySpeed(results)
-	tg := anyTG(results)
-	writeHeader(w, len(working), len(results), ping, speed, tg)
+	writeHeader(w, len(working), len(results), ping, speed)
 	if len(working) == 0 && len(torn) == 0 {
 		fmt.Fprintln(w, "\nNo working endpoints found.")
 		return
@@ -405,21 +361,21 @@ func writeFullReport(w io.Writer, results []endpointResult, ping bool) {
 
 	if len(working) > 0 {
 		fmt.Fprintln(w)
-		writeRows(w, working, ping, speed, tg)
+		writeRows(w, working, ping, speed)
 	}
 	if len(torn) > 0 {
 		fmt.Fprintf(w, "\n# %d torn down (handshake ok, data flowed, then cut and never recovered)\n", len(torn))
-		writeRows(w, torn, ping, speed, tg)
+		writeRows(w, torn, ping, speed)
 	}
 	if len(working) > 0 {
-		writeNodePicks(w, working, ping, speed, tg)
+		writeNodePicks(w, working, ping, speed)
 	}
 }
 
-func writeRows(w io.Writer, results []endpointResult, ping, speed, tg bool) {
-	fmt.Fprintf(w, reportRowFmt, "ENDPOINT", "ENDPOINT PING", tunFields("TUN PING", "LOSS", ping), tgField("TG", tg), speedField("SPEED", speed), "SEEN AS", "NODE", "NODE LOCATION")
+func writeRows(w io.Writer, results []endpointResult, ping, speed bool) {
+	fmt.Fprintf(w, reportRowFmt, "ENDPOINT", "ENDPOINT PING", tunFields("TUN PING", "LOSS", ping), speedField("SPEED", speed), "SEEN AS", "NODE", "NODE LOCATION")
 	for _, r := range results {
-		fmt.Fprintf(w, reportRowFmt, r.endpoint, r.epPingStr(), tunFieldsOf(r, ping), tgField(tgStr(r), tg), speedField(speedStr(r.speed), speed), exitRegion(r.exit), exitColo(r.exit), exitColoLocation(r.exit))
+		fmt.Fprintf(w, reportRowFmt, r.endpoint, r.epPingStr(), tunFieldsOf(r, ping), speedField(speedStr(r.speed), speed), exitRegion(r.exit), exitColo(r.exit), exitColoLocation(r.exit))
 	}
 }
 
@@ -451,33 +407,12 @@ func writeConsole(w io.Writer, ph phaseResult, r *lipgloss.Renderer, ping bool) 
 	writeJunkNote(w, st, ph.run)
 	fmt.Fprintf(w, "Nodes:     %s\n", st.accent.Render(uniqueSorted(working, func(r endpointResult) string { return r.exit.colo }, noFlag)))
 	fmt.Fprintf(w, "Seen as:   %s\n", st.accent.Render(uniqueSorted(working, func(r endpointResult) string { return r.exit.loc }, flagEmoji)))
+	if ping {
+		fmt.Fprintf(w, "Ping to:   %s\n", st.accent.Render(pingTargetLabel()))
+	}
 	fmt.Fprintf(w, "Working:   %s\n", st.ok.Render(strconv.Itoa(len(working)))+st.dim.Render(" / ")+strconv.Itoa(len(results))+" probed")
 	writeTornNote(w, st, len(torn))
-	writeTGNote(w, st, working)
 	writePicksTable(w, st, working, torn, ping)
-}
-
-func writeTGNote(w io.Writer, st conStyles, working []endpointResult) {
-	if !anyTG(working) {
-		return
-	}
-	reached, missing := 0, allDCs
-	for _, r := range working {
-		if r.tgOK {
-			reached++
-		}
-		missing &^= r.tgDCs
-	}
-	count := st.ok.Render(strconv.Itoa(reached))
-	if reached == 0 {
-		count = st.fail.Render("0")
-	}
-	fmt.Fprintf(w, "Telegram:  %s\n", count+st.dim.Render(" / ")+strconv.Itoa(len(working))+" working endpoints reached all "+strconv.Itoa(len(telegramDCs))+" DCs")
-	// A DC no exit reaches is the usual reason the column is all partial:
-	// accounts homed there cannot connect through any of these endpoints.
-	if missing != 0 {
-		fmt.Fprintf(w, "           %s\n", st.fail.Render(dcNames(missing)+" never answered from any endpoint"))
-	}
 }
 
 func protoLine(run protoRun) string {
@@ -525,10 +460,9 @@ func banner(st conStyles) string {
 type pickRow struct {
 	cells   []string
 	status  int
-	tgOK    bool
-	tg      time.Duration
 	loss    float32
 	latency time.Duration
+	speed   float64
 }
 
 func tunCells(r endpointResult, ping bool) []string {
@@ -555,9 +489,8 @@ func metricCols(first, n int) map[int]bool {
 
 func writePicksTable(w io.Writer, st conStyles, working, torn []endpointResult, ping bool) {
 	speed := anySpeed(working) || anySpeed(torn)
-	tg := anyTG(working) || anyTG(torn)
 	metrics := func(r endpointResult) []string {
-		return append(append(tunCells(r, ping), tgCells(r, tg)...), speedCells(r, speed)...)
+		return append(tunCells(r, ping), speedCells(r, speed)...)
 	}
 
 	var rows []pickRow
@@ -567,7 +500,7 @@ func writePicksTable(w io.Writer, st conStyles, working, torn []endpointResult, 
 			for _, r := range nodePicks(picks) {
 				cells := append([]string{subnet, r.endpoint, r.epPingStr()}, metrics(r)...)
 				cells = append(cells, exitRegion(r.exit), exitColo(r.exit), exitColoLocation(r.exit))
-				rows = append(rows, pickRow{cells, statusOK, r.tgOK, r.tg, r.loss, r.sortPing()})
+				rows = append(rows, pickRow{cells, statusOK, r.loss, r.sortPing(), r.speed})
 			}
 			continue
 		}
@@ -575,37 +508,32 @@ func writePicksTable(w io.Writer, st conStyles, working, torn []endpointResult, 
 			r := bestByPing(picks)
 			cells := append([]string{subnet, r.endpoint, r.epPingStr()}, metrics(r)...)
 			cells = append(cells, "torn down", "", "")
-			rows = append(rows, pickRow{cells, statusTorn, r.tgOK, r.tg, r.loss, r.sortPing()})
+			rows = append(rows, pickRow{cells, statusTorn, r.loss, r.sortPing(), r.speed})
 			continue
 		}
 		cells := []string{subnet, "no working endpoints", ""}
-		cells = append(cells, make([]string, len(tunHeaders(ping))+len(tgHeaders(tg))+len(speedHeaders(speed)))...)
+		cells = append(cells, make([]string, len(tunHeaders(ping))+len(speedHeaders(speed)))...)
 		cells = append(cells, "", "", "")
-		rows = append(rows, pickRow{cells, statusNone, false, 0, 0, 0})
+		rows = append(rows, pickRow{cells, statusNone, 0, 0, 0})
 	}
 	// Status first: a subnet with no result carries a synthetic 0% loss, which
 	// would otherwise sort it above a working endpoint that measured any loss.
-	// Then Telegram, so the table follows the order its own title promises.
 	sort.SliceStable(rows, func(i, j int) bool {
 		if rows[i].status != rows[j].status {
 			return rows[i].status < rows[j].status
 		}
-		if rows[i].tgOK != rows[j].tgOK {
-			return rows[i].tgOK
-		}
-		if tgSort && rows[i].tgOK && rows[i].tg != rows[j].tg {
-			return rows[i].tg < rows[j].tg
+		if bestBy == bestKeySpeed && rows[i].speed != rows[j].speed {
+			return rows[i].speed > rows[j].speed
 		}
 		return lessLossDur(rows[i].loss, rows[i].latency, rows[j].loss, rows[j].latency)
 	})
 
 	headers := append([]string{"SUBNET", "ENDPOINT", "ENDPOINT PING"}, tunHeaders(ping)...)
-	headers = append(headers, tgHeaders(tg)...)
 	headers = append(headers, speedHeaders(speed)...)
 	headers = append(headers, "SEEN AS", "NODE", "NODE LOCATION")
-	accentCols := metricCols(2, 1+len(tunHeaders(ping))+len(tgHeaders(tg))+len(speedHeaders(speed)))
+	accentCols := metricCols(2, 1+len(tunHeaders(ping))+len(speedHeaders(speed)))
 
-	fmt.Fprintln(w, "\n"+st.title.Render("Best endpoint per subnet and node ("+bestNote(ping, tg)+")"))
+	fmt.Fprintln(w, "\n"+st.title.Render("Best endpoint per subnet and node ("+bestNote(ping)+")"))
 	t := table.New().
 		Border(lipgloss.RoundedBorder()).
 		BorderStyle(st.dim).
@@ -655,10 +583,22 @@ func uniqueSorted(working []endpointResult, key func(endpointResult) string, fla
 	return strings.Join(vals, "  ")
 }
 
+// Set from -sweep-ports (flags.go), for the reason bestBy is a global: a run that
+// sweeps ports asks to compare them, so each ip:port keeps its own row instead of
+// collapsing into the fastest port of its node.
+var sweepingPorts bool
+
+func pickKey(r endpointResult) string {
+	if sweepingPorts {
+		return r.endpoint
+	}
+	return exitColo(r.exit)
+}
+
 func nodePicks(working []endpointResult) []endpointResult {
 	byNode := make(map[string][]endpointResult)
 	for _, r := range working {
-		byNode[exitColo(r.exit)] = append(byNode[exitColo(r.exit)], r)
+		byNode[pickKey(r)] = append(byNode[pickKey(r)], r)
 	}
 	picks := make([]endpointResult, 0, len(byNode))
 	for _, group := range byNode {
@@ -690,12 +630,12 @@ func speedTargets(results []endpointResult) []endpointResult {
 	return out
 }
 
-func writeNodePicks(w io.Writer, working []endpointResult, ping, speed, tg bool) {
+func writeNodePicks(w io.Writer, working []endpointResult, ping, speed bool) {
 	picks := nodePicks(working)
-	fmt.Fprintf(w, "\n# Best endpoint per node (%s)\n", bestNote(ping, tg))
-	fmt.Fprintf(w, nodePickRowFmt, "NODE", "ENDPOINT", "ENDPOINT PING", tunFields("TUN PING", "LOSS", ping), tgField("TG", tg), speedField("SPEED", speed), "SEEN AS", "NODE LOCATION")
+	fmt.Fprintf(w, "\n# Best endpoint per node (%s)\n", bestNote(ping))
+	fmt.Fprintf(w, nodePickRowFmt, "NODE", "ENDPOINT", "ENDPOINT PING", tunFields("TUN PING", "LOSS", ping), speedField("SPEED", speed), "SEEN AS", "NODE LOCATION")
 	for _, r := range picks {
-		fmt.Fprintf(w, nodePickRowFmt, exitColo(r.exit), r.endpoint, r.epPingStr(), tunFieldsOf(r, ping), tgField(tgStr(r), tg), speedField(speedStr(r.speed), speed), exitRegion(r.exit), exitColoLocation(r.exit))
+		fmt.Fprintf(w, nodePickRowFmt, exitColo(r.exit), r.endpoint, r.epPingStr(), tunFieldsOf(r, ping), speedField(speedStr(r.speed), speed), exitRegion(r.exit), exitColoLocation(r.exit))
 	}
 }
 
@@ -712,4 +652,71 @@ func writeToFile(path string, ph phaseResult, ping bool) error {
 	defer f.Close()
 	writeFullReport(f, ph.results, ping)
 	return nil
+}
+
+func anyTG(results []endpointResult) bool {
+	for _, r := range results {
+		if r.tgSeen {
+			return true
+		}
+	}
+	return false
+}
+
+func tgStr(r endpointResult) string {
+	switch {
+	case !r.tgSeen:
+		return "-"
+	case !r.tgOK:
+		return tgPartialStr(r.tgDCs)
+	}
+	return latencyStr(r.tg)
+}
+
+func tgField(s string, show bool) string {
+	if !show {
+		return ""
+	}
+	return fmt.Sprintf("%-9s ", s)
+}
+
+func tgCells(r endpointResult, show bool) []string {
+	if !show {
+		return nil
+	}
+	return []string{tgStr(r)}
+}
+
+func tgHeaders(show bool) []string {
+	if !show {
+		return nil
+	}
+	return []string{"TG"}
+}
+
+func filterByTelegram(ph phaseResult) phaseResult {
+	return filterResults(ph, func(r endpointResult) bool { return r.tgOK })
+}
+
+func writeTGNote(w io.Writer, st conStyles, working []endpointResult) {
+	if !anyTG(working) {
+		return
+	}
+	reached, missing := 0, allDCs
+	for _, r := range working {
+		if r.tgOK {
+			reached++
+		}
+		missing &^= r.tgDCs
+	}
+	count := st.ok.Render(strconv.Itoa(reached))
+	if reached == 0 {
+		count = st.fail.Render("0")
+	}
+	fmt.Fprintf(w, "Telegram:  %s\n", count+st.dim.Render(" / ")+strconv.Itoa(len(working))+" working endpoints reached all "+strconv.Itoa(len(telegramDCs))+" DCs")
+	// A DC no exit reaches is the usual reason the column is all partial:
+	// accounts homed there cannot connect through any of these endpoints.
+	if missing != 0 {
+		fmt.Fprintf(w, "           %s\n", st.fail.Render(dcNames(missing)+" never answered from any endpoint"))
+	}
 }

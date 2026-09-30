@@ -1,4 +1,4 @@
-module github.com/niklzz/warpscout-tg
+module github.com/vernette/warpscout
 
 go 1.26.3
 

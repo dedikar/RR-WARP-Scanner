@@ -141,7 +141,9 @@ func main() {
 		defer flush()
 	}
 
-	// Pick up the (possibly replaced) stderr for the non-TUI output path too.
+	// Pick up the (possibly replaced) stderr for the non-TUI output path too:
+	// a value captured at package init would keep pointing at the original
+	// descriptor and lose the timestamps added above.
 	plainOut = os.Stderr
 
 	errPal = palette{enabled: colorEnabled(os.Stderr)}

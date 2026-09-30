@@ -2,9 +2,7 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -119,6 +117,24 @@ func TestLessByLossRTT(t *testing.T) {
 		if got := lessByLossRTT(c.a, c.b); got != c.want {
 			t.Errorf("%s: lessByLossRTT = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+func TestLessByLossRTTSpeed(t *testing.T) {
+	bestBy = bestKeySpeed
+	defer func() { bestBy = bestKeyPing }()
+
+	slowPing := endpointResult{endpoint: "a", epPing: 200 * time.Millisecond, speed: 90}
+	fastPing := endpointResult{endpoint: "b", epPing: 20 * time.Millisecond, speed: 9}
+	if !lessByLossRTT(slowPing, fastPing) {
+		t.Error("higher speed did not outrank lower ping")
+	}
+	unmeasured := endpointResult{endpoint: "c", epPing: 10 * time.Millisecond}
+	if !lessByLossRTT(fastPing, unmeasured) {
+		t.Error("an unmeasured endpoint outranked a measured one")
+	}
+	if !lessByLossRTT(unmeasured, endpointResult{endpoint: "d", epPing: 90 * time.Millisecond}) {
+		t.Error("with no speed measured the order stopped following ping")
 	}
 }
 
@@ -315,8 +331,10 @@ func TestRenderMihomoConf(t *testing.T) {
 	for _, want := range []string{
 		"proxies:",
 		"- name: \"AWG WARP\"",
-		"server: 188.114.98.5",
-		"port: 2408",
+		"peers:",
+		"      - server: 188.114.98.5",
+		"        port: 2408",
+		"        persistent-keepalive: 25",
 		"type: wireguard",
 		"private-key: " + warpPrivateKey,
 		"public-key: " + warpPublicKey,
@@ -344,12 +362,12 @@ func TestRenderMihomoConf(t *testing.T) {
 		t.Fatal(err)
 	}
 	v6 := string(conf)
-	for _, want := range []string{"server: 2606:4700:d0::1", "ipv6: " + warpAddressV6, "allowed-ips: ['::/0']", "dns: [" + warpDNSv6 + "]"} {
+	for _, want := range []string{"server: 2606:4700:d0::1", "ipv6: " + warpAddressV6, "allowed-ips: ['::/0']", "dns: ['2606:4700:4700::1111', '2606:4700:4700::1001']"} {
 		if !strings.Contains(v6, want) {
 			t.Errorf("IPv6 mihomo config missing %q:\n%s", want, v6)
 		}
 	}
-	if strings.Contains(v6, "ip: ") || strings.Contains(v6, "1.1.1.1") {
+	if strings.Contains(v6, "  ip: ") || strings.Contains(v6, "1.1.1.1") {
 		t.Errorf("IPv6 config must not carry IPv4:\n%s", v6)
 	}
 
@@ -413,6 +431,73 @@ func TestRenderMihomoConfChained(t *testing.T) {
 	}
 	if strings.Contains(got, "mtu: 1280") {
 		t.Errorf("only the inner proxy takes an MTU without -mtu:\n%s", got)
+	}
+}
+
+func TestRenderMihomoJSON(t *testing.T) {
+	conf, err := renderMihomoConf(options{confType: confTypeMihomoJSON}, "188.114.98.5:2408", protoRun{kindAWG, protoAWG})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proxies []map[string]any
+	if err := json.Unmarshal(conf, &proxies); err != nil {
+		t.Fatalf("%v:\n%s", err, conf)
+	}
+	if len(proxies) != 1 {
+		t.Fatalf("got %d proxies, want 1:\n%s", len(proxies), conf)
+	}
+	p := proxies[0]
+	if p["name"] != "AWG WARP" || p["type"] != "wireguard" || p["udp"] != true {
+		t.Errorf("proxy fields wrong:\n%s", conf)
+	}
+	peers, ok := p["peers"].([]any)
+	if !ok || len(peers) != 1 {
+		t.Fatalf("peers missing:\n%s", conf)
+	}
+	peer := peers[0].(map[string]any)
+	if peer["server"] != "188.114.98.5" {
+		t.Errorf("peer server wrong:\n%s", conf)
+	}
+	if peer["port"] != float64(2408) {
+		t.Errorf("port %#v is not a JSON number:\n%s", peer["port"], conf)
+	}
+	if dns, _ := p["dns"].([]any); len(dns) != 2 {
+		t.Errorf("dns must be a list of two resolvers:\n%s", conf)
+	}
+	if !strings.Contains(string(conf), "<r 2>") {
+		t.Errorf("i1 must not be HTML-escaped:\n%s", conf)
+	}
+	var last int
+	for _, key := range []string{"\"name\"", "\"type\"", "\"private-key\"", "\"ip\"", "\"peers\"", "\"amnezia-wg-option\"", "\"udp\"", "\"dns\""} {
+		i := strings.Index(string(conf), key)
+		if i < last {
+			t.Fatalf("%s is out of order:\n%s", key, conf)
+		}
+		last = i
+	}
+}
+
+func TestRenderMihomoJSONChained(t *testing.T) {
+	outerAcct = &account{PrivateKey: "outerPriv=", PeerPublicKey: "outerPub=", IPv4: "172.16.0.9"}
+	outer = &nest{run: protoRun{kindAWG, protoAWG}, endpoint: "188.114.97.177:2408", label: "188.114.97.177:2408 (awg)"}
+	defer func() { outer, outerAcct = nil, nil }()
+
+	conf, err := renderMihomoConf(options{confType: confTypeMihomoJSON}, "8.47.69.130:2408", protoRun{kindWG, protoWG})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proxies []map[string]any
+	if err := json.Unmarshal(conf, &proxies); err != nil {
+		t.Fatalf("%v:\n%s", err, conf)
+	}
+	if len(proxies) != 2 {
+		t.Fatalf("got %d proxies, want 2:\n%s", len(proxies), conf)
+	}
+	if proxies[0]["name"] != "AWG WARP OUTER" || proxies[1]["dialer-proxy"] != "AWG WARP OUTER" {
+		t.Errorf("the inner proxy must dial through the outer one:\n%s", conf)
+	}
+	if _, ok := proxies[0]["dns"]; ok {
+		t.Errorf("the carrier takes no resolvers:\n%s", conf)
 	}
 }
 
@@ -616,7 +701,7 @@ func TestProbeTargets(t *testing.T) {
 	ips := []netip.Addr{netip.MustParseAddr("162.159.198.1"), netip.MustParseAddr("162.159.198.2")}
 	ports := []int{443, 8443}
 
-	wg := probeTargets(protoRun{kindAWG, protoAWG}, ips, ports)
+	wg := probeTargets(protoRun{kindAWG, protoAWG}, false, ips, ports)
 	if len(wg) != len(ips) {
 		t.Fatalf("wg targets = %d, want one per address", len(wg))
 	}
@@ -626,8 +711,17 @@ func TestProbeTargets(t *testing.T) {
 		}
 	}
 
-	// Working ports differ per MASQUE address, so every pair must be its own row.
-	masque := probeTargets(protoRun{kindMASQUE, protoMASQUE}, ips, ports)
+	swept := probeTargets(protoRun{kindAWG, protoAWG}, true, ips, ports)
+	if len(swept) != len(ips)*len(ports) {
+		t.Fatalf("swept targets = %d, want %d", len(swept), len(ips)*len(ports))
+	}
+	for _, tg := range swept {
+		if tg.port == 0 {
+			t.Errorf("swept target %v pins no port", tg)
+		}
+	}
+
+	masque := probeTargets(protoRun{kindMASQUE, protoMASQUE}, false, ips, ports)
 	if len(masque) != len(ips)*len(ports) {
 		t.Fatalf("masque targets = %d, want %d", len(masque), len(ips)*len(ports))
 	}
@@ -1114,7 +1208,6 @@ func TestNoEndpointMsg(t *testing.T) {
 		{"masque", options{proto: protoMASQUE}, masqueBlockedMsg},
 		{"masque-h2", options{proto: protoMASQUEH2}, masqueBlockedMsg},
 		{"filters win over the hint", options{proto: protoAWG, colos: []string{"HEL"}}, "no endpoint landed on node HEL"},
-		{"tg-only", options{proto: protoAWG, tg: true, tgOnly: true}, "no working endpoint reached Telegram - drop -tg-only to see what the scan did find"},
 	}
 	for _, c := range cases {
 		if got := noEndpointMsg(c.opts); got != c.want {
@@ -1154,7 +1247,7 @@ func TestReportSpeedColumn(t *testing.T) {
 	}
 
 	var withSpeed bytes.Buffer
-	writeRows(&withSpeed, []endpointResult{r}, false, true, false)
+	writeRows(&withSpeed, []endpointResult{r}, false, true)
 	for _, want := range []string{"SPEED", "42.5 Mbps"} {
 		if !strings.Contains(withSpeed.String(), want) {
 			t.Errorf("-speed report is missing %q:\n%s", want, withSpeed.String())
@@ -1162,7 +1255,7 @@ func TestReportSpeedColumn(t *testing.T) {
 	}
 
 	var noSpeed bytes.Buffer
-	writeRows(&noSpeed, []endpointResult{r}, false, false, false)
+	writeRows(&noSpeed, []endpointResult{r}, false, false)
 	if strings.Contains(noSpeed.String(), "SPEED") || strings.Contains(noSpeed.String(), "42.5") {
 		t.Errorf("report without -speed leaks the column:\n%s", noSpeed.String())
 	}
@@ -1201,43 +1294,6 @@ func TestPicksTablePerNode(t *testing.T) {
 	}
 	if strings.Contains(out, "8.47.69.12:2408") {
 		t.Errorf("picks table shows a slower endpoint of an already listed node:\n%s", out)
-	}
-}
-
-func TestPicksTableTelegramFirst(t *testing.T) {
-	defer func(saved []netip.Prefix) { pools = saved }(pools)
-	pools, _ = parseTargets("8.47.69.0/24,8.6.112.0/24")
-
-	pick := func(addr string, ms int, tgOK bool) endpointResult {
-		return endpointResult{
-			ip:       netip.MustParseAddr(addr),
-			endpoint: addr + ":2408",
-			epPing:   time.Duration(ms) * time.Millisecond,
-			exit:     metaResult{loc: "RU", colo: "HEL"},
-			tg:       time.Duration(ms) * time.Millisecond,
-			tgOK:     tgOK,
-			tgSeen:   true,
-			ok:       true,
-			durable:  true,
-		}
-	}
-	working := []endpointResult{
-		pick("8.47.69.10", 5, false), // faster, but Telegram is blocked
-		pick("8.6.112.10", 40, true),
-	}
-
-	var buf bytes.Buffer
-	r := lipgloss.NewRenderer(&buf)
-	r.SetColorProfile(termenv.Ascii)
-	writePicksTable(&buf, newConStyles(r), working, nil, false)
-
-	out := buf.String()
-	reached, blocked := strings.Index(out, "8.6.112.10:2408"), strings.Index(out, "8.47.69.10:2408")
-	if reached < 0 || blocked < 0 {
-		t.Fatalf("picks table lost a row:\n%s", out)
-	}
-	if reached > blocked {
-		t.Errorf("picks table ranks a blocked endpoint above one that reached Telegram:\n%s", out)
 	}
 }
 
@@ -1436,7 +1492,7 @@ func TestReportPingColumns(t *testing.T) {
 	}
 
 	var withPing bytes.Buffer
-	writeRows(&withPing, []endpointResult{r}, true, false, false)
+	writeRows(&withPing, []endpointResult{r}, true, false)
 	for _, want := range []string{"ENDPOINT PING", "TUN PING", "LOSS", "30ms", "90ms", "10%"} {
 		if !strings.Contains(withPing.String(), want) {
 			t.Errorf("-tun-ping report is missing %q:\n%s", want, withPing.String())
@@ -1444,7 +1500,7 @@ func TestReportPingColumns(t *testing.T) {
 	}
 
 	var noPing bytes.Buffer
-	writeRows(&noPing, []endpointResult{r}, false, false, false)
+	writeRows(&noPing, []endpointResult{r}, false, false)
 	for _, unwanted := range []string{"TUN PING", "LOSS", "90ms", "10%"} {
 		if strings.Contains(noPing.String(), unwanted) {
 			t.Errorf("report without -tun-ping leaks %q:\n%s", unwanted, noPing.String())
@@ -1629,238 +1685,5 @@ func TestReadVersionCache(t *testing.T) {
 	}
 	if _, ok := readVersionCache(filepath.Join(t.TempDir(), "absent"), time.Hour); ok {
 		t.Error("a missing cache must miss")
-	}
-}
-
-func TestReachedDCs(t *testing.T) {
-	answering := func(delays map[string]time.Duration) dialFunc {
-		return func(ctx context.Context, addr string) (net.Conn, error) {
-			d, ok := delays[addr]
-			if !ok {
-				return nil, fmt.Errorf("connection refused")
-			}
-			select {
-			case <-time.After(d):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-			c, other := net.Pipe()
-			other.Close()
-			return c, nil
-		}
-	}
-	addrs := []string{"slow:443", "fast:443", "dead:443"}
-
-	// One DC dead: the mask names the two that answered, the RTT is the slower
-	// one - a client homed on the slow DC sees that, not the fast one.
-	rtt, reached := reachedDCs(context.Background(), answering(map[string]time.Duration{
-		"slow:443": 300 * time.Millisecond,
-		"fast:443": 10 * time.Millisecond,
-	}), addrs, time.Second)
-	if reached != 0b011 {
-		t.Fatalf("reached = %03b, want slow and fast only", reached)
-	}
-	if rtt < 300*time.Millisecond {
-		t.Errorf("rtt = %v, want the slowest DC's answer", rtt)
-	}
-	if reached == allDCs {
-		t.Error("a set with a dead DC must not count as all reached")
-	}
-
-	if _, reached := reachedDCs(context.Background(), answering(nil), addrs, time.Second); reached != 0 {
-		t.Errorf("refused set reached = %03b, want none", reached)
-	}
-
-	// Every dial hangs: the shared deadline is the ceiling, not len(addrs) x timeout.
-	hang := func(ctx context.Context, _ string) (net.Conn, error) {
-		<-ctx.Done()
-		return nil, ctx.Err()
-	}
-	start := time.Now()
-	if _, reached := reachedDCs(context.Background(), hang, addrs, 100*time.Millisecond); reached != 0 {
-		t.Errorf("hanging set reached = %03b, want none", reached)
-	}
-	if waited := time.Since(start); waited > 500*time.Millisecond {
-		t.Errorf("reachedDCs waited %v, want a single shared timeout", waited)
-	}
-
-	if got := tgPartialStr(0); got != "blocked" {
-		t.Errorf("tgPartialStr(0) = %q", got)
-	}
-	if got := tgPartialStr(0b10101); got != "3/5" {
-		t.Errorf("tgPartialStr(DC1,3,5) = %q, want 3/5", got)
-	}
-	if got := dcNames(0b01010); got != "DC2, DC4" {
-		t.Errorf("dcNames = %q", got)
-	}
-}
-
-func TestMTProtoProbe(t *testing.T) {
-	run := func(server func(net.Conn)) error {
-		client, dc := net.Pipe()
-		defer client.Close()
-		go server(dc)
-		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-		defer cancel()
-		return mtprotoProbe(ctx, client)
-	}
-
-	answer := func(reply []byte) func(net.Conn) {
-		return func(c net.Conn) {
-			defer c.Close()
-			req := make([]byte, 4+4+40)
-			if _, err := io.ReadFull(c, req); err != nil {
-				t.Errorf("fake DC read: %v", err)
-				return
-			}
-			if !bytes.Equal(req[:4], []byte{0xee, 0xee, 0xee, 0xee}) {
-				t.Errorf("probe magic = % x, want intermediate transport", req[:4])
-			}
-			if n := binary.LittleEndian.Uint32(req[4:8]); n != 40 {
-				t.Errorf("probe frame length = %d, want 40", n)
-			}
-			if !bytes.Equal(req[8:16], make([]byte, 8)) {
-				t.Error("probe auth_key_id is not zero, DC would drop it")
-			}
-			if c := binary.LittleEndian.Uint32(req[28:32]); c != 0xbe7e8ef1 {
-				t.Errorf("probe constructor = %#x, want req_pq_multi", c)
-			}
-			c.Write(reply)
-		}
-	}
-
-	resPQ := binary.LittleEndian.AppendUint32(nil, 84)
-	resPQ = append(resPQ, make([]byte, 84)...)
-	if err := run(answer(resPQ)); err != nil {
-		t.Errorf("probe against an answering DC: %v", err)
-	}
-
-	if err := run(answer(make([]byte, 4))); err == nil {
-		t.Error("probe accepted a zero-length frame")
-	}
-
-	// A DPI box that completes the handshake and eats the payload: the read
-	// must time out instead of reporting the DC as reachable.
-	if err := run(func(c net.Conn) { io.Copy(io.Discard, c) }); err == nil {
-		t.Error("probe reported a silent connection as answered")
-	}
-}
-
-func TestTelegramColumn(t *testing.T) {
-	reached := endpointResult{endpoint: "1.2.3.4:2408", tg: 40 * time.Millisecond, tgDCs: allDCs, tgOK: true, tgSeen: true, ok: true, durable: true}
-	blocked := endpointResult{endpoint: "5.6.7.8:2408", tgSeen: true, ok: true, durable: true}
-	partial := endpointResult{endpoint: "7.7.7.7:2408", tg: 300 * time.Millisecond, tgDCs: 0b10101, tgSeen: true, ok: true, durable: true}
-	unchecked := endpointResult{endpoint: "9.9.9.9:2408", ok: true, durable: true}
-
-	if !anyTG([]endpointResult{unchecked, blocked}) {
-		t.Error("anyTG missed an endpoint the check ran on")
-	}
-	if anyTG([]endpointResult{unchecked}) {
-		t.Error("anyTG reported an unchecked set as checked")
-	}
-	for _, c := range []struct {
-		r    endpointResult
-		want string
-	}{{reached, "40ms"}, {blocked, "blocked"}, {partial, "3/5"}, {unchecked, "-"}} {
-		if got := tgStr(c.r); got != c.want {
-			t.Errorf("tgStr(%s) = %q, want %q", c.r.endpoint, got, c.want)
-		}
-	}
-
-	var withTG bytes.Buffer
-	writeFullReport(&withTG, []endpointResult{reached, blocked, partial}, false)
-	for _, want := range []string{"TG", "40ms", "blocked", "3/5", "Telegram reachability"} {
-		if !strings.Contains(withTG.String(), want) {
-			t.Errorf("-tg report is missing %q:\n%s", want, withTG.String())
-		}
-	}
-
-	// Only partial exits: the summary must name the DCs nobody reached, and a
-	// partial exit must not be counted as one that reached Telegram.
-	var onlyPartial bytes.Buffer
-	rPlain := lipgloss.NewRenderer(&onlyPartial)
-	rPlain.SetColorProfile(termenv.Ascii)
-	writeTGNote(&onlyPartial, newConStyles(rPlain), []endpointResult{partial})
-	for _, want := range []string{"0 / 1 working endpoints reached all 5 DCs", "DC2, DC4 never answered"} {
-		if !strings.Contains(onlyPartial.String(), want) {
-			t.Errorf("partial-only summary is missing %q:\n%s", want, onlyPartial.String())
-		}
-	}
-	if strings.Contains(withTG.String(), "never answered") {
-		t.Errorf("summary blames a DC that one endpoint did reach:\n%s", withTG.String())
-	}
-
-	var noTG bytes.Buffer
-	writeFullReport(&noTG, []endpointResult{unchecked}, false)
-	for _, unwanted := range []string{"TG", "Telegram"} {
-		if strings.Contains(noTG.String(), unwanted) {
-			t.Errorf("report without -tg leaks %q:\n%s", unwanted, noTG.String())
-		}
-	}
-}
-
-func TestLessByLossRTTTelegram(t *testing.T) {
-	reached := endpointResult{endpoint: "1.2.3.4:2408", epPing: 200 * time.Millisecond, tgOK: true, tgSeen: true}
-	fast := endpointResult{endpoint: "5.6.7.8:2408", epPing: 10 * time.Millisecond, tgSeen: true}
-
-	if !lessByLossRTT(reached, fast) {
-		t.Error("an endpoint that reached Telegram must rank first even when slower")
-	}
-	if lessByLossRTT(fast, reached) {
-		t.Error("a faster endpoint without Telegram must not outrank one with it")
-	}
-
-	// Without -tg no result carries tgOK, so the old ordering has to survive.
-	a, b := reached, fast
-	a.tgOK, a.tgSeen, b.tgSeen = false, false, false
-	if lessByLossRTT(a, b) {
-		t.Error("without -tg the slower endpoint must not rank first")
-	}
-}
-
-func TestLessByLossRTTTGSort(t *testing.T) {
-	defer func(prev bool) { tgSort = prev }(tgSort)
-
-	tgFast := endpointResult{endpoint: "1.2.3.4:2408", epPing: 200 * time.Millisecond, tg: 90 * time.Millisecond, tgOK: true, tgSeen: true}
-	tgSlow := endpointResult{endpoint: "5.6.7.8:2408", epPing: 10 * time.Millisecond, tg: 400 * time.Millisecond, tgOK: true, tgSeen: true}
-
-	// Plain -tg: both reached Telegram, so the endpoint ping decides.
-	tgSort = false
-	if lessByLossRTT(tgFast, tgSlow) {
-		t.Error("under -tg alone the Telegram RTT must not override the ping")
-	}
-
-	// -tg-only: the Telegram RTT is the metric, whatever the ping says.
-	tgSort = true
-	if !lessByLossRTT(tgFast, tgSlow) {
-		t.Error("under -tg-only the lower Telegram RTT must rank first")
-	}
-	if lessByLossRTT(tgSlow, tgFast) {
-		t.Error("under -tg-only the higher Telegram RTT must not rank first")
-	}
-
-	// Equal Telegram RTT falls back to the usual loss/ping ordering.
-	same := tgFast
-	same.tg = tgSlow.tg
-	if !lessByLossRTT(tgSlow, same) {
-		t.Error("equal Telegram RTT must fall back to the ping ordering")
-	}
-}
-
-func TestFilterTelegram(t *testing.T) {
-	ph := phaseResult{run: protoRun{kindWG, "wg"}, results: []endpointResult{
-		{endpoint: "1.2.3.4:2408", tgOK: true, tgSeen: true, ok: true, durable: true},
-		{endpoint: "5.6.7.8:2408", tgSeen: true, ok: true, durable: true},
-	}}
-
-	if !filtered(options{tgOnly: true}) {
-		t.Error("filtered() does not count -tg-only as a filter")
-	}
-	got := applyFilters(ph, options{tgOnly: true})
-	if len(got.results) != 1 || got.results[0].endpoint != "1.2.3.4:2408" {
-		t.Errorf("-tg-only kept %v, want only the endpoint that reached Telegram", got.results)
-	}
-	if n := len(applyFilters(ph, options{}).results); n != 2 {
-		t.Errorf("without -tg-only the filter dropped %d endpoints", 2-n)
 	}
 }

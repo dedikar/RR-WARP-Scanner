@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -32,6 +33,8 @@ func setupScan(opts options) (protoRun, []netip.Addr, error) {
 	if len(opts.targets) > 0 {
 		pools = opts.targets
 	}
+	// -tg-only is not just a filter: having asked for Telegram-capable endpoints
+	// only, the fastest of those is what the user wants ranked first.
 	tgSort = opts.tgOnly
 	// With -interface, interfaceAddr is the authoritative family check (per-interface,
 	// precise error); the host-wide check only runs without it.
@@ -185,6 +188,8 @@ func runScanCmd(ctx context.Context, opts options) error {
 
 	ph, err := runScanUI(ctx, cancel, opts, run, ips, time.Duration(opts.timeoutSec)*time.Second, "", "", pe)
 	if err != nil {
+		// The page reads JSON, so a failure has to arrive as JSON too - exiting
+		// with a bare status would leave it parsing an empty stdout.
 		if opts.jsonOut {
 			_ = writeJSONError(os.Stdout, err.Error())
 			return err
@@ -196,15 +201,6 @@ func runScanCmd(ctx context.Context, opts options) error {
 	if filtered(opts) {
 		ph = applyFilters(ph, opts)
 		pools = poolsWithHits(ph)
-	}
-
-	if opts.speed && showsSpeed(opts) {
-		// pw, not nil: the speed phase reports its own progress, and passing nil
-		// meant its barBegin/probed events never reached the progress file - the
-		// UI showed a finished scan (100%) while downloads were still running.
-		runWithUI(opts, cancel, false, "", "q to skip the rest", pe, func(emit emitter) {
-			measureSpeed(ctx, ph, time.Duration(opts.timeoutSec)*time.Second, opts.speedTop, emit)
-		})
 	}
 
 	// JSON is the machine contract: an empty result is a valid answer, so it is
@@ -222,6 +218,18 @@ func runScanCmd(ctx context.Context, opts options) error {
 	// file whose only content is "No working endpoints found".
 	if !anyEndpoint(ph) {
 		return fmt.Errorf("%s", noEndpointMsg(opts))
+	}
+
+	if (opts.speed || opts.bestBy == bestKeySpeed) && showsSpeed(opts) {
+		if !opts.speed {
+			fmt.Fprintln(os.Stderr, errPal.dim("\n-best-by speed ranks by throughput, so the speedtest phase runs even without -speed"))
+		}
+		// pe, not nil: the speed phase reports its own progress, and passing nil
+		// meant its barBegin/probed events never reached the progress file - the
+		// UI showed a finished scan (100%) while downloads were still running.
+		runWithUI(opts, cancel, false, "", "q to skip the rest", pe, func(emit emitter) {
+			measureSpeed(ctx, ph, time.Duration(opts.timeoutSec)*time.Second, opts.speedTop, emit)
+		})
 	}
 
 	// Held rather than returned: the scan itself succeeded, so the report file is
@@ -267,6 +275,9 @@ func tablesFollow(opts options) bool {
 }
 
 func showsSpeed(opts options) bool {
+	if opts.bestBy == bestKeySpeed {
+		return true
+	}
 	if !opts.best && opts.conf != confStdout {
 		return true
 	}
@@ -294,14 +305,10 @@ func measureSpeed(ctx context.Context, ph phaseResult, timeout time.Duration, sp
 	defer closeAfterDrain(tn)
 
 	speeds := make(map[string]float64, len(picks))
-	for i, p := range picks {
+	for _, p := range picks {
 		if ctx.Err() != nil {
 			break
 		}
-		// Progress line before each measurement, not after: a download takes
-		// seconds, and without this the speed phase looked like a stall - the log
-		// showed nothing while the engine was busy.
-		fmt.Fprintf(os.Stderr, "Speedtest %d/%d: %s\n", i+1, len(picks), p.endpoint)
 		speeds[p.endpoint] = endpointSpeed(ctx, tn, p.endpoint, timeout)
 		emit(speedMsg{endpoint: p.endpoint, mbps: speeds[p.endpoint]})
 		emit(probedMsg{})
@@ -358,7 +365,8 @@ func anyEndpoint(ph phaseResult) bool {
 }
 
 func filtered(opts options) bool {
-	return opts.tgOnly || len(opts.colos)+len(opts.countries)+len(opts.dropColos)+len(opts.dropCountries) > 0
+	return opts.tgOnly ||
+		len(opts.colos)+len(opts.countries)+len(opts.dropColos)+len(opts.dropCountries) > 0
 }
 
 func applyFilters(ph phaseResult, opts options) phaseResult {
@@ -376,6 +384,8 @@ func applyFilters(ph phaseResult, opts options) phaseResult {
 			ph = f.by(ph, f.list, f.want)
 		}
 	}
+	// Last, so it filters what the node/country passes left rather than the other
+	// way round: -tg-only is the narrowest condition and the most expensive one.
 	if opts.tgOnly {
 		ph = filterByTelegram(ph)
 	}
@@ -441,12 +451,12 @@ func writeConfFile(opts options, ph phaseResult) error {
 	fmt.Fprintln(os.Stderr, errPal.dim(fmt.Sprintf("\n%s config for %s written to %s", ph.run.name, best.endpoint, opts.conf)))
 	if outer != nil {
 		note := fmt.Sprintf("  it holds both tunnels of the chain (outer %s) - split it in two before use", outer.label)
-		if opts.confType == confTypeMihomo {
+		if isMihomo(opts.confType) {
 			note = fmt.Sprintf("  it chains through %s itself (dialer-proxy)", outer.label)
 		}
 		fmt.Fprintln(os.Stderr, errPal.dim(note))
 	}
-	if ph.run.isMASQUE() && opts.confType != confTypeMihomo {
+	if ph.run.isMASQUE() && !isMihomo(opts.confType) {
 		if _, port, err := net.SplitHostPort(best.endpoint); err == nil {
 			h2 := ""
 			if ph.run.isH2() {
@@ -518,14 +528,28 @@ func runWithUI(opts options, cancel context.CancelFunc, ping bool, header, quitH
 	p := tea.NewProgram(m, tea.WithOutput(os.Stderr))
 	defer enableVirtualTerminal()
 
+	// A terminal the TUI cannot drive is not a reason to fail the run.
+	// Fall back to the plain emitter and keep scanning.
+	var uiFailed atomic.Bool
+	emit := func(msg tea.Msg) {
+		if uiFailed.Load() {
+			plainEmit(msg)
+			return
+		}
+		p.Send(msg)
+	}
+
 	workDone := make(chan struct{})
 	go func() {
-		work(wrap(p.Send))
+		work(wrap(emit))
+		// Only doneMsg quits the program, and an error path returns without one:
+		// without this the TUI spins on forever under the failure it just printed.
+		emit(doneMsg{})
 		close(workDone)
 	}()
 	if _, err := p.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, errPal.fail(err.Error()))
-		return err
+		uiFailed.Store(true)
+		fmt.Fprintln(os.Stderr, errPal.fail("live output unavailable: "+err.Error()))
 	}
 	<-workDone
 	return nil
@@ -548,7 +572,11 @@ func runScan(ctx context.Context, opts options, run protoRun, ips []netip.Addr, 
 		warpPorts = ports
 		emit(stepMsg{done: true, label: "Port", summary: fmt.Sprintf("%d (pinned, phase 1 skipped)", opts.port)})
 	}
-	if !run.isMASQUE() && opts.port == 0 {
+	if opts.sweepPorts == sweepAll {
+		warpPorts = allWarpPorts()
+		emit(stepMsg{done: true, label: "Ports", summary: fmt.Sprintf("sweeping all %d known ports (phase 1 skipped)", len(warpPorts))})
+	}
+	if !run.isMASQUE() && opts.port == 0 && opts.sweepPorts != sweepAll {
 		open, err := reachablePorts(ctx, run, ips, timeout, portProbeSample, opts.tunnelParallel, emit)
 		if err != nil {
 			emit(stepMsg{fail: true, summary: fmt.Sprintf("phase 1 failed: %v", err)})
@@ -561,7 +589,10 @@ func runScan(ctx context.Context, opts options, run protoRun, ips []netip.Addr, 
 		warpPorts = open
 	}
 
-	targets := probeTargets(run, ips, ports)
+	if !run.isMASQUE() {
+		ports = warpPorts
+	}
+	targets := probeTargets(run, opts.sweepPorts != "", ips, ports)
 	results := make([]endpointResult, len(targets))
 	pings := opts.tunPingCount
 	label := fmt.Sprintf("Phase 2: verifying tunnels (proto=%s)", run.name)
