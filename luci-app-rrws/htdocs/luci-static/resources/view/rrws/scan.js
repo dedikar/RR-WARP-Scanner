@@ -233,6 +233,18 @@ function injectPageCss() {
 		'  flex: 0 0 auto;',
 		'  margin: 0;',
 		'}',
+		// On a phone the one-row layout has no room: the text column shrinks until
+		// every label wraps onto its own line, which is what the mobile screenshot
+		// showed. Below this width the card stacks instead - data on top, actions
+		// underneath - and the actions get their own full-width row.
+		'@media (max-width: 700px) {',
+		'  .rrws-card { flex-direction: column; align-items: stretch; }',
+		'  .rrws-card-actions { justify-content: flex-start; margin-top: 8px; }',
+		'  .rrws-card-actions > .btn { flex: 1 1 auto; }',
+		// The endpoint line and the node summary both wrap on a phone; without this
+		// the badges and node codes pile up with no separation.
+		'  .rrws-card-meta { line-height: 1.6; }',
+		'}',
 	].join('\n');
 
 	var el = document.createElement('style');
@@ -434,6 +446,35 @@ function pingColor(v) {
 // The node code (IATA) is the field people scan for, so it gets the same accent
 // colour everywhere it appears - in a card and in the result summary.
 var NODE_COLOR = '#eab308';
+
+// Telegram gets its own, much higher bands. An MTProto round-trip through WARP is
+// not comparable to an ICMP ping: 400-600 ms is the normal range here, so the
+// ICMP thresholds would paint every row red and say nothing. These are set for
+// "is this endpoint usable for Telegram at all", not for latency quality.
+var TG_GOOD_MS = 400;
+var TG_OK_MS = 1000;
+
+function tgColor(v) {
+	if (!v || v <= 0) return null;
+	if (v <= TG_GOOD_MS) return '#16a34a';
+	if (v <= TG_OK_MS) return '#b45309';
+	return '#dc2626';
+}
+
+// Build "подпись значение" with only the value coloured.
+//
+// The colour belongs on the number, not on the word: colouring the whole pair
+// turned the labels themselves green and yellow, so "пинг" and "в туннеле" read
+// as the measured values and the row looked like it was highlighting the wrong
+// thing.
+function metric(label, value, color) {
+	var frag = document.createDocumentFragment();
+	frag.appendChild(document.createTextNode(label + ' '));
+	frag.appendChild(E('span', {
+		style: 'font-weight:600' + (color ? ';color:' + color : '')
+	}, value));
+	return frag;
+}
 
 function lossText(v) {
 	if (v == null) return '?';
@@ -1298,34 +1339,31 @@ return view.extend({
 			if (r.loss_pct > 0) line1.appendChild(E('span', { style: 'color:#e8a' }, 'потери ' + r.loss_pct + '%'));
 			info.appendChild(line1);
 
-			// Metadata is built as separate spans, not one joined string: the node
-			// code and the latency values carry colour, and a plain text node
-			// cannot be partly styled.
+			// Metadata is built as separate spans, not one joined string: only the
+			// values carry colour, and a plain text node cannot be partly styled.
 			var meta = E('div', { 'class': 'rrws-card-meta' });
 			var sep = function() { meta.appendChild(document.createTextNode(' • ')); };
 
-			// Node and country share the accent colour used in the summary line.
+			// The node code itself is the accent; the word "узел" stays neutral so
+			// the colour marks the code rather than the label.
+			meta.appendChild(document.createTextNode('узел '));
 			meta.appendChild(E('span', {
 				style: 'color:' + NODE_COLOR + ';font-weight:600',
 				title: 'Узел Cloudflare (IATA-код города) и страна выхода'
-			}, 'узел ' + (r.node || '?') + (r.country ? ' / ' + r.country : '')));
+			}, (r.node || '?') + (r.country ? ' / ' + r.country : '')));
 			if (r.city) {
 				sep();
 				meta.appendChild(document.createTextNode(r.city));
 			}
 			sep();
-			var pc = pingColor(r.ping_ms);
-			meta.appendChild(E('span', { style: pc ? 'color:' + pc + ';font-weight:600' : '' },
-				'пинг ' + pingText(r.ping_ms)));
+			meta.appendChild(metric('пинг', pingText(r.ping_ms), pingColor(r.ping_ms)));
 			if (r.measured) {
 				sep();
-				var tc = pingColor(r.tun_ping_ms);
-				meta.appendChild(E('span', { style: tc ? 'color:' + tc + ';font-weight:600' : '' },
-					'в туннеле ' + pingText(r.tun_ping_ms)));
+				meta.appendChild(metric('в туннеле', pingText(r.tun_ping_ms), pingColor(r.tun_ping_ms)));
 			}
 			if (r.tg_ok && r.tg_rtt_ms) {
 				sep();
-				meta.appendChild(document.createTextNode('Telegram ' + pingText(r.tg_rtt_ms)));
+				meta.appendChild(metric('Telegram', pingText(r.tg_rtt_ms), tgColor(r.tg_rtt_ms)));
 			}
 			// speed_measured tells "not tested" from "tested, got nothing": a
 			// failed measurement is a real datum, not a missing one.
