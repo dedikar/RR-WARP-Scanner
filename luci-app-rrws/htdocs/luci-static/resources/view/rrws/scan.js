@@ -609,11 +609,21 @@ return view.extend({
 			if (n !== wasNarrow) { wasNarrow = n; layoutBanner(); }
 		});
 
-		if (dev.authorized === false) {
+		// The banner is for foreign hardware, so it shows only on an explicit
+		// "not ours". A missing answer (an older backend, a failed call) is not
+		// evidence either way, and showing the vendor banner to a RouteRich owner
+		// because one probe did not run is worse than showing nothing.
+		if (dev && dev.authorized === false) {
 			deviceBanner.style.display = 'flex';
 			if (window.console) {
-				console.log('[rrws] unsupported device (no ' + (dev.oui || '24:0F:5E') +
-					' OUI): ' + JSON.stringify(dev.macs || {}));
+				// Which of the three signals fired, and what the OUI check had to
+				// look at - without this the report is "not ours, somehow".
+				console.log('[rrws] foreign device: signals=' +
+					JSON.stringify(dev.signals || {}) +
+					' board=' + JSON.stringify(dev.board_name || '') +
+					' distrib=' + JSON.stringify(dev.distrib_id || '') +
+					' interfaces=' + JSON.stringify(dev.interfaces || []) +
+					' macs=' + JSON.stringify(dev.macs || {}));
 			}
 		}
 

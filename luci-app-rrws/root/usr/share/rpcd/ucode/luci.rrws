@@ -323,30 +323,89 @@ function account_status() {
 
 // RouteRich hardware check, kept from the previous package: physical NICs carry
 // the 24:0F:5E OUI. Informational only - it never blocks the page.
+// Is this a RouteRich router? Answered by three independent signals, any one of
+// which is enough, because each can fail on its own:
+//
+//   - the MAC OUI 24:0F:5E on a physical interface;
+//   - DISTRIB_ID=RouteRich in /etc/openwrt_release;
+//   - board_name containing "routerich".
+//
+// The earlier version relied on the OUI alone and only looked at six hardcoded
+// interface names (br-lan, eth0, lan1..3, eth1). Those names match this router,
+// but a RouteRich board with different naming - lan, wlan0, enp1s0 - would read
+// nothing at all and the page would announce foreign hardware. So the interfaces
+// are now enumerated from /sys/class/net rather than guessed, and a build string
+// that literally says RouteRich counts as well.
 function device_check() {
-	const candidates = ['br-lan', 'eth0', 'lan1', 'lan2', 'lan3', 'eth1'];
+	const RRWS_OUI = '24:0f:5e';
 	const macs = {};
-	let authorized = false;
-	for (let i = 0; i < length(candidates); i++) {
-		const mac = trim(read_file('/sys/class/net/' + candidates[i] + '/address') ?? '');
-		if (!length(mac)) continue;
-		macs[candidates[i]] = mac;
-		if (substr(mac, 0, 8) == RRWS_OUI) authorized = true;
+	let ouiMatch = false;
+
+	// Enumerate what is actually there instead of a fixed list. The directory
+	// exists on every Linux; a failure here is not fatal, the other two signals
+	// still decide.
+	let ifaces = [];
+	try {
+		const listing = command('ls /sys/class/net 2>/dev/null');
+		if (length(listing)) ifaces = split(trim(listing), '\n');
+	} catch (e) {}
+
+	for (let i = 0; i < length(ifaces); i++) {
+		const name = trim(ifaces[i]);
+		if (!length(name)) continue;
+		const mac = trim(read_file('/sys/class/net/' + name + '/address') ?? '');
+		// Tunnel and virtual interfaces report an all-zero address, and some of
+		// them report only four bytes of it ("00:00:00:00" on gre0 and sit0), so
+		// the length is checked instead of comparing to a full zero literal.
+		// They carry no vendor information either way.
+		if (length(mac) != 17 || mac == '00:00:00:00:00:00') continue;
+		// A locally-administered address (bit 1 of the first octet set) belongs to
+		// a virtual interface, so it can neither confirm nor deny the vendor.
+		const b1 = substr(mac, 1, 1);
+		if (b1 == '2' || b1 == '6' || b1 == 'a' || b1 == 'e') continue;
+		macs[name] = mac;
+		if (substr(mac, 0, 8) == RRWS_OUI) ouiMatch = true;
 	}
+
+	// The vendor build identifies itself. This is the signal that survives an
+	// unusual interface naming, and the one a plain OpenWrt image will not have.
+	let distribId = '';
+	let distribDesc = '';
+	try {
+		const rel = read_file('/etc/openwrt_release') ?? '';
+		const lines = split(rel, '\n');
+		for (let i = 0; i < length(lines); i++) {
+			let m = match(lines[i], /^DISTRIB_ID='?([^']+)'?/);
+			if (m) distribId = trim(m[1]);
+			m = match(lines[i], /^DISTRIB_DESCRIPTION='?([^']+)'?/);
+			if (m) distribDesc = trim(m[1]);
+		}
+	} catch (e) {}
+
+	let boardName = '';
+	try { boardName = trim(read_file('/tmp/sysinfo/board_name') ?? ''); } catch (e) {}
+
+	// lc(), not lower(): this ucode build has no lower() - calling it throws
+	// "left-hand side is not a function" and would take the whole page down.
+	const idMatch = length(distribId) && lc(distribId) == 'routerich';
+	const boardMatch = length(boardName) && index(lc(boardName), 'routerich') >= 0;
+	const authorized = ouiMatch || idMatch || boardMatch;
+
 	return {
 		authorized,
+		signals: {
+			oui: ouiMatch,
+			distrib_id: idMatch,
+			board_name: boardMatch,
+		},
+		// Which interfaces were actually examined, so a foreign-router report
+		// shows whether the OUI check had anything to look at.
+		interfaces: ifaces,
 		macs,
 		oui: '24:0F:5E',
-		board_name: trim(read_file('/tmp/sysinfo/board_name') ?? ''),
-		distrib_id: (function() {
-			const rel = read_file('/etc/openwrt_release') ?? '';
-			const lines = split(rel, '\n');
-			for (let i = 0; i < length(lines); i++) {
-				const m = match(lines[i], /^DISTRIB_ID='?([^']+)'?/);
-				if (m) return trim(m[1]);
-			}
-			return '';
-		})(),
+		board_name: boardName,
+		distrib_id: distribId,
+		distrib_description: distribDesc,
 	};
 }
 
