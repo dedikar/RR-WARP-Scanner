@@ -223,14 +223,15 @@ function injectPageCss() {
 		// line is small enough already, and this is the line that carries the
 		// facts being compared between rows (ping, tunnel, Telegram).
 		'.rrws-card-meta { font-size: 13px; margin-top: 4px; color: var(--text-color-medium, #666); }',
-		// The actions sit at the right edge of the card, away from the values they
-		// act on: at the left they crowded the metadata line and made the card
-		// read as a block of text with buttons in the middle of it.
+		// The actions sit on the same line as the endpoint, pinned to the right edge
+		// of the card. `flex: 0 0 auto` keeps them at their natural width so the
+		// text column is the part that shrinks on a narrow screen.
 		'.rrws-card-actions {',
 		'  display: flex;',
-		'  justify-content: flex-end;',
+		'  align-items: center;',
 		'  gap: 6px;',
-		'  margin-top: 6px;',
+		'  flex: 0 0 auto;',
+		'  margin: 0;',
 		'}',
 	].join('\n');
 
@@ -408,6 +409,31 @@ function pingText(v) {
 	if (!v || v <= 0) return '?';
 	return v + ' мс';
 }
+
+// Colour a latency value by how usable it is on this network.
+//
+// The thresholds come from the measurements in the README: on this router the
+// good endpoints sit around 40-70 ms in-tunnel and Telegram round-trips land in
+// the 400-600 ms range, which is normal for MTProto over WARP and not a fault.
+// So the bands are set for "is this worth keeping", not for absolute quality:
+// green is what the top of the list looks like, yellow is workable, red is the
+// tail. They are deliberately generous - colouring half the list red would say
+// nothing.
+//
+// Kept as a single place so the card and any future summary agree.
+var PING_GOOD_MS = 80;
+var PING_OK_MS = 150;
+
+function pingColor(v) {
+	if (!v || v <= 0) return null;
+	if (v <= PING_GOOD_MS) return '#16a34a';
+	if (v <= PING_OK_MS) return '#b45309';
+	return '#dc2626';
+}
+
+// The node code (IATA) is the field people scan for, so it gets the same accent
+// colour everywhere it appears - in a card and in the result summary.
+var NODE_COLOR = '#eab308';
 
 function lossText(v) {
 	if (v == null) return '?';
@@ -1177,9 +1203,16 @@ return view.extend({
 		left.appendChild(toggleBtn);
 		left.appendChild(E('div', { style: 'font-weight:600' }, title));
 		if (nodeList.length) {
-			var nodesRow = E('div', { style: 'font-size:13px;color:var(--text-color-medium, #888)' },
-				nodeList.map(function(x) { return x.code + (x.n > 1 ? ' ×' + x.n : ''); }).join('  '));
-			nodesRow.title = 'Узлы Cloudflare, на которые попали найденные эндпоинты (IATA-код города)';
+			var nodesRow = E('div', { style: 'font-size:13px',
+				title: 'Узлы Cloudflare, на которые попали найденные эндпоинты (IATA-код города)' });
+			nodeList.forEach(function(x, i) {
+				if (i) nodesRow.appendChild(document.createTextNode('  '));
+				nodesRow.appendChild(E('span', { style: 'color:' + NODE_COLOR + ';font-weight:600' }, x.code));
+				// The count stays theme-coloured: the accent marks which node it is,
+				// and colouring the number too would make the row read as a solid
+				// block of yellow.
+				if (x.n > 1) nodesRow.appendChild(document.createTextNode(' ×' + x.n));
+			});
 			left.appendChild(nodesRow);
 		}
 		head.appendChild(left);
@@ -1239,6 +1272,19 @@ return view.extend({
 			var cls = 'rrws-card' + (r.torn ? ' rrws-card-torn' : (isBest ? ' rrws-card-best' : ''));
 			var row = E('div', { 'class': cls });
 
+			// One row per result: identity on the left, actions pinned right.
+			//
+			// This used to stack three blocks - endpoint line, metadata line,
+			// buttons - which spent a full row on the buttons alone. They now sit
+			// on the same line as the data they act on, so a screen shows roughly a
+			// third more endpoints. `min-width:0` on the text column is what lets it
+			// shrink instead of pushing the buttons off the card.
+			row.style.display = 'flex';
+			row.style.alignItems = 'center';
+			row.style.gap = '12px';
+
+			var info = E('div', { style: 'flex:1 1 auto;min-width:0' });
+
 			var line1 = E('div', { style: 'display:flex;align-items:center;gap:10px;flex-wrap:wrap' });
 			line1.appendChild(E('code', { style: 'font-size:14px' }, r.endpoint));
 			line1.appendChild(tgBadge(r));
@@ -1250,20 +1296,47 @@ return view.extend({
 				title: 'DPI обрывает туннель — данные через него не идут'
 			}, 'ОБРЫВ'));
 			if (r.loss_pct > 0) line1.appendChild(E('span', { style: 'color:#e8a' }, 'потери ' + r.loss_pct + '%'));
-			row.appendChild(line1);
+			info.appendChild(line1);
 
-			var parts = [];
-			parts.push('узел ' + (r.node || '?') + (r.country ? ' / ' + r.country : ''));
-			if (r.city) parts.push(r.city);
-			parts.push('пинг ' + pingText(r.ping_ms));
-			if (r.measured) parts.push('в туннеле ' + pingText(r.tun_ping_ms));
-			if (r.tg_ok && r.tg_rtt_ms) parts.push('Telegram ' + pingText(r.tg_rtt_ms));
+			// Metadata is built as separate spans, not one joined string: the node
+			// code and the latency values carry colour, and a plain text node
+			// cannot be partly styled.
+			var meta = E('div', { 'class': 'rrws-card-meta' });
+			var sep = function() { meta.appendChild(document.createTextNode(' • ')); };
+
+			// Node and country share the accent colour used in the summary line.
+			meta.appendChild(E('span', {
+				style: 'color:' + NODE_COLOR + ';font-weight:600',
+				title: 'Узел Cloudflare (IATA-код города) и страна выхода'
+			}, 'узел ' + (r.node || '?') + (r.country ? ' / ' + r.country : '')));
+			if (r.city) {
+				sep();
+				meta.appendChild(document.createTextNode(r.city));
+			}
+			sep();
+			var pc = pingColor(r.ping_ms);
+			meta.appendChild(E('span', { style: pc ? 'color:' + pc + ';font-weight:600' : '' },
+				'пинг ' + pingText(r.ping_ms)));
+			if (r.measured) {
+				sep();
+				var tc = pingColor(r.tun_ping_ms);
+				meta.appendChild(E('span', { style: tc ? 'color:' + tc + ';font-weight:600' : '' },
+					'в туннеле ' + pingText(r.tun_ping_ms)));
+			}
+			if (r.tg_ok && r.tg_rtt_ms) {
+				sep();
+				meta.appendChild(document.createTextNode('Telegram ' + pingText(r.tg_rtt_ms)));
+			}
 			// speed_measured tells "not tested" from "tested, got nothing": a
 			// failed measurement is a real datum, not a missing one.
-			if (r.speed_measured) parts.push('скорость ' + r.speed_mbps.toFixed(1) + ' Мбит/с');
-			row.appendChild(E('div', { 'class': 'rrws-card-meta' }, parts.join(' • ')));
+			if (r.speed_measured) {
+				sep();
+				meta.appendChild(document.createTextNode('скорость ' + r.speed_mbps.toFixed(1) + ' Мбит/с'));
+			}
+			info.appendChild(meta);
+			row.appendChild(info);
 
-			var actions = E('div', { 'class': 'rrws-card-actions' });
+			var actions = E('div', { 'class': 'rrws-card-actions', style: 'flex:0 0 auto' });
 			var cpBtn = E('button', { 'class': 'btn cbi-button cbi-button-action', style: 'font-size:12px' }, 'Скопировать .conf');
 			cpBtn.addEventListener('click', function() { copyText(makeConf(r.endpoint), cpBtn); });
 			actions.appendChild(cpBtn);
