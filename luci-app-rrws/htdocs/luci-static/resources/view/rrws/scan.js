@@ -1435,10 +1435,34 @@ return view.extend({
 
 		var comparators = {
 			default: function(a, b, d) {
-				// This key has its own fixed order and no direction to flip: it is
-				// "what the tool recommends", not a column to sort ascending.
+				// The order that answers "which of these should I actually use",
+				// decided by the fields in the order they matter:
+				//
+				//   1. Telegram reaches all five DCs  - without it some accounts
+				//      simply will not connect, whatever else the row scores;
+				//   2. lowest Telegram round-trip     - among equals on point 1 this
+				//      is the one the user feels, and it is what the numbers differ
+				//      on most: 398 ms against 2783 ms on the same result set;
+				//   3. stable (not torn, no loss);
+				//   4. lowest ping, preferring the in-tunnel figure.
+				//
+				// Point 2 is what used to be missing: the engine ranks within the
+				// Telegram group only when -tg-only is set, so with the filter off
+				// it sorted that group by ping alone and put a 2783 ms endpoint
+				// above a 398 ms one.
+				//
+				// No direction to flip: this is "what the tool recommends", not a
+				// column to sort ascending.
 				if (!!b.tg_ok !== !!a.tg_ok) return b.tg_ok ? 1 : -1;
+				if (a.tg_ok && b.tg_ok) {
+					var ag = a.tg_rtt_ms || 9999;
+					var bg = b.tg_rtt_ms || 9999;
+					if (ag !== bg) return ag - bg;
+				}
 				if (!!a.torn !== !!b.torn) return a.torn ? 1 : -1;
+				var al = a.loss_pct || 0;
+				var bl = b.loss_pct || 0;
+				if (al !== bl) return al - bl;
 				var at = a.tun_ping_ms || a.ping_ms || 9999;
 				var bt = b.tun_ping_ms || b.ping_ms || 9999;
 				return at - bt;
