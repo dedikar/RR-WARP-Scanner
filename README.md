@@ -335,8 +335,8 @@ Cloudflare WARP отвечает на четырёх основных UDP-пор
 интернет.
 
 ```bash
-git clone <адрес репозитория>
-cd <repo-dir>
+git clone https://github.com/dedikar/RR-WARP-Scanner
+cd RR-WARP-Scanner
 ./build.sh
 ```
 
@@ -344,7 +344,7 @@ cd <repo-dir>
 и оба формата:
 
 ```bash
-./build.sh 0.3.1-r43   # .ipk
+./build.sh 0.3.1-r49   # .ipk
 ./build.sh both        # .ipk и .apk
 ```
 
