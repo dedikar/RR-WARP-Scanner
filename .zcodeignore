@@ -1,0 +1,73 @@
+# Build output: the IPK and the cross-compiled binary are reproducible from
+# source, and a 12 MB binary in git bloats the history for no gain.
+build/
+
+# Internal session/harness state (plans written by the coding agent).
+.zcode/
+
+# Scratch space used while debugging on the router.
+.tmp/
+.tmp2/
+.tmp3/
+
+# Compiled Go test binaries and coverage.
+engine/*.test
+*.out
+coverage.txt
+
+# Router credentials or exported account files, if anyone drops them here.
+# These are gitignored on purpose: this repository is published.
+*.pem
+*account*.json
+rrws-account.json
+.env
+
+# Editor / OS noise.
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Python bytecode from the on-router test scripts.
+__pycache__/
+*.pyc
+
+# Router backups: they hold the live WARP account, which must never be committed.
+# The account is a credential in its own right - anyone with it can use the
+# tunnel and burn the registration.
+backup/router-*/
+
+# Source snapshots duplicate what the git tag already pins (v0.3.1-r38-backup),
+# and 2.7 MB of tarball in history buys nothing the tag does not.
+backup/*.tar.gz
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+node_modules/
+bower_components/
+jspm_packages/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

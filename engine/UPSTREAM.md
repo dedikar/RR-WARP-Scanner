@@ -1,16 +1,32 @@
-# Upstream fork record
+# Upstream record
 
-- **Source:** https://github.com/niklzz/warpscout-tg
-- **Commit:** `3ad3a643dc8410bc0724fd6dee6c9b4feb754afc`
-- **Commit date:** 2026-09-03
+- **Base:** https://github.com/vernette/warpscout (branch `master`) — active project
+- **Forked through:** https://github.com/niklzz/warpscout-tg, commit `3ad3a643dc8410bc0724fd6dee6c9b4feb754afc`, 2026-09-03
 - **License:** MIT (see `LICENSE`)
-- **Base project:** fork of https://github.com/vernette/warpscout
 
-## Why this fork exists
+## What came from where
 
-The router build drives this engine from a LuCI page instead of a terminal, so the
-changes are additive and deliberately small. Everything else stays upstream-shaped so
-future upstream commits can be merged by hand.
+Verified by diffing this tree against `vernette/warpscout@master` on 2026-09-30. The
+only files here that upstream does not have:
+
+| File | Origin |
+|---|---|
+| `telegram.go` | the `warpscout-tg` fork — its one useful addition |
+| `jsonout.go` (+ `_test.go`) | ours — machine-readable JSON report (`-json`) for the ubus backend |
+| `progress.go` | ours — atomic progress file (`-progress`) the LuCI page polls |
+| `timestamps.go` (+ `_test.go`) | ours — timestamps on engine log lines |
+
+Everything else is upstream's, including `masque.go`, `findsni.go`, `findjunk.go`,
+`nest.go`, `socks.go` and `tui.go`. Do not attribute those to the fork: they exist in
+the base, and saying otherwise once led to the wrong conclusion that moving onto the
+base would be expensive.
+
+## Pending: move onto the base
+
+`warpscout-tg` may be abandoned while `vernette/warpscout` keeps moving, which would
+strand us on a dead branch. The move is measured, not estimated: copy the four files
+above, repeat the edits listed below, build, run the acceptance test. Hours, not days
+— the two trees are otherwise identical.
 
 ## Local changes
 
@@ -18,8 +34,9 @@ future upstream commits can be merged by hand.
 |---|---|
 | `jsonout.go` | **new** — machine-readable JSON report (`-json`) for the ubus backend |
 | `progress.go` | **new** — atomic progress file (`-progress`) the LuCI page polls |
+| `timestamps.go` | **new** — prefix every engine log line with a local timestamp |
 | `flags.go` | `-json`, `-progress` flags; `-p` default now `defaultProto` |
-| `main.go` | `runScanCmd`: JSON/progress wiring, `runScanUI`/`runWithUI` take a `*progressWriter` |
+| `main.go` | `runScanCmd`: JSON/progress wiring, `runScanUI`/`runWithUI` take a `*progressEmitter` |
 | `warp.go` | `defaultProto = protoAWG` (see comment there — measured, not stylistic) |
 
 ## The `-p awg` default
