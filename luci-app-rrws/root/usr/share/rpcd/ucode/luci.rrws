@@ -135,7 +135,14 @@ const DEFAULTS = {
 	sample: 100,
 	proto: 'awg',
 	tg: 1,
+	// Off by default: -tg already puts Telegram-capable endpoints first, and
+	// hiding the rest is a deliberate narrowing, not a sensible default.
+	tg_only: 0,
 	tun_ping: 1,
+	// Durability burst length, in echoes. The engine's own default is 10; raising
+	// it makes the DPI check stricter (a tunnel torn down late is then caught),
+	// at the cost of two seconds per ten echoes, per endpoint.
+	tun_ping_count: 10,
 	stable_only: 1,
 	port: 0,
 	exclude: [],
@@ -435,7 +442,8 @@ function known_nodes() {
 function get_settings() {
 	let s = read_json_file(SETTINGS) ?? {};
 	let out = {};
-	const keys = ['hosts', 'timeout', 'jobs', 'sample', 'proto', 'tg', 'tun_ping',
+	const keys = ['hosts', 'timeout', 'jobs', 'sample', 'proto', 'tg', 'tg_only',
+		'tun_ping', 'tun_ping_count',
 		'stable_only', 'port', 'jc', 'jmin', 'jmax', 'gen_i1', 'i1', 'i1_sni',
 		'full', 'ipv6', 'speed', 'speed_top', 'exclude', 'exclude_nodes', 'include_nodes',
 		'include_countries', 'exclude_countries'];
@@ -488,7 +496,12 @@ function save_opts(req) {
 	if (a.port != null) merged.port = clamp(to_int(a.port, 0), 0, 65535);
 	if (a.proto != null) merged.proto = trim_or(a.proto, default_proto());
 	if (a.tg != null) merged.tg = a.tg ? 1 : 0;
+	if (a.tg_only != null) merged.tg_only = a.tg_only ? 1 : 0;
 	if (a.tun_ping != null) merged.tun_ping = a.tun_ping ? 1 : 0;
+	// The engine enforces a floor of 5 echoes (fewer cannot show a tear-down
+	// pattern) and rejects anything below it, so clamp here rather than let the
+	// scan die on the flag.
+	if (a.tun_ping_count != null) merged.tun_ping_count = clamp(to_int(a.tun_ping_count, 10), 5, 60);
 	if (a.stable_only != null) merged.stable_only = a.stable_only ? 1 : 0;
 	if (a.full != null) merged.full = a.full ? 1 : 0;
 	if (a.ipv6 != null) merged.ipv6 = a.ipv6 ? 1 : 0;
@@ -517,7 +530,9 @@ function save_opts(req) {
 		',"port":' + merged.port +
 		',"proto":"' + json_escape(merged.proto) + '"' +
 		',"tg":' + merged.tg +
+		',"tg_only":' + merged.tg_only +
 		',"tun_ping":' + merged.tun_ping +
+		',"tun_ping_count":' + merged.tun_ping_count +
 		',"stable_only":' + merged.stable_only +
 		',"full":' + merged.full +
 		',"ipv6":' + merged.ipv6 +
@@ -565,7 +580,14 @@ function build_scan_args(s) {
 	// protocol and scale
 	push(args, '-p', s.proto);
 	if (s.tun_ping) push(args, '-P');
+	// -tg-only implies -tg in the engine itself, so passing both is harmless and
+	// keeps the scan's own log honest about what was asked for.
 	if (s.tg) push(args, '--tg');
+	if (s.tg_only) push(args, '--tg-only');
+	// Only meaningful with -P, and only when it differs from the engine default:
+	// sending the default back would be noise in the log.
+	if (s.tun_ping && to_int(s.tun_ping_count, 10) != 10)
+		push(args, '--tun-ping-count', '' + to_int(s.tun_ping_count, 10));
 	// The field is labelled "Хостов на подсеть" and the engine's -n is addresses
 	// PER SUBNET, so the value passes straight through. An earlier version
 	// divided it by the subnet count, treating it as a total: entering 100 then
@@ -1036,7 +1058,8 @@ const methods = {
 			sample: 0, timeout: 0, jobs: 0, port: 0,
 			jc: 0, jmin: 0, jmax: 0,
 			proto: '', gen_i1: '', i1: '', i1_sni: '',
-			tg: false, tun_ping: false, stable_only: false,
+			tg: false, tg_only: false, tun_ping: false, tun_ping_count: 0,
+			stable_only: false,
 			full: false, ipv6: false, speed: false, speed_top: 0,
 			exclude: [], exclude_nodes: [], include_nodes: [],
 			include_countries: [], exclude_countries: [],

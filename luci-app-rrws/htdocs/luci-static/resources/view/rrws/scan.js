@@ -901,9 +901,47 @@ return view.extend({
 		if (s.tg) tgChk.checked = true;
 		sec.appendChild(f('', chkLabel(tgChk, ' Проверять Telegram (MTProto по всем 5 ДЦ)')));
 
+		// Narrowing the result to Telegram-capable endpoints. Placed next to the
+		// probe switch because it only makes sense once the probe runs, and
+		// disabled with it, so the filter cannot be switched on against a scan
+		// that produces no Telegram data at all.
+		var tgOnlyChk = E('input', { type: 'checkbox', name: 'tg_only' });
+		if (s.tg_only) tgOnlyChk.checked = true;
+		var tgOnlyRow = f('', chkLabel(tgOnlyChk, ' Оставить только эндпоинты с рабочим Telegram'));
+		sec.appendChild(tgOnlyRow);
+
 		var tpChk = E('input', { type: 'checkbox', name: 'tun_ping' });
 		if (s.tun_ping) tpChk.checked = true;
 		sec.appendChild(f('', chkLabel(tpChk, ' Измерять задержку и потери внутри туннеля (TUN PING / LOSS)')));
+
+		// Burst length for the durability check. The engine sends this many echoes
+		// 200 ms apart and calls a tunnel torn if the answer stops mid-burst, so a
+		// longer burst catches a DPI cut that happens seconds in - at two seconds
+		// per ten echoes, per endpoint.
+		var tpCountRow = num('tun_ping_count', s.tun_ping_count == null ? 10 : s.tun_ping_count,
+			5, 60, 70, 'echoes в серии, 5–60: больше ловит поздние обрывы, но дольше');
+		sec.appendChild(f('Эхо-пакетов (TUN PING)', tpCountRow));
+
+		// Keep the two switches honest with each other: the count is meaningless
+		// without the probe, and the filter without the probe has nothing to
+		// filter on - the engine would drop every endpoint and the run would look
+		// like it found nothing.
+		var syncTgUi = function() {
+			var on = tgChk.checked;
+			var inp = tgOnlyRow.querySelector('input');
+			if (inp) { inp.disabled = !on; inp.parentNode.style.opacity = on ? '1' : '.5'; }
+			if (!on) { if (inp) inp.checked = false; }
+		};
+		var syncTpUi = function() {
+			var on = tpChk.checked;
+			var inp = tpCountRow.querySelector('input');
+			if (inp) inp.disabled = !on;
+			tpCountRow.style.opacity = on ? '1' : '.5';
+		};
+		tgChk.addEventListener('change', syncTgUi);
+		tpChk.addEventListener('change', syncTpUi);
+		syncTgUi();
+		syncTpUi();
 
 		var stChk = E('input', { type: 'checkbox', name: 'stable_only' });
 		if (s.stable_only) stChk.checked = true;
@@ -1116,7 +1154,10 @@ return view.extend({
 			gen_i1: g('gen_i1') || '',
 			i1: g('i1') || '',
 			i1_sni: g('i1_sni') || '',
-			tg: c('tg'), tun_ping: c('tun_ping'), stable_only: c('stable_only'),
+			tg: c('tg'), tg_only: c('tg_only'),
+			tun_ping: c('tun_ping'),
+			tun_ping_count: parseInt(g('tun_ping_count'), 10) || 10,
+			stable_only: c('stable_only'),
 			full: c('full'), ipv6: c('ipv6'), speed: c('speed'),
 			speed_top: parseInt(g('speed_top'), 10) || 5,
 			exclude: ex,
