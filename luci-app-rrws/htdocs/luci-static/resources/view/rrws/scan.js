@@ -244,6 +244,15 @@ function injectPageCss() {
 		// The endpoint line and the node summary both wrap on a phone; without this
 		// the badges and node codes pile up with no separation.
 		'  .rrws-card-meta { line-height: 1.6; }',
+		// The label column in the settings blocks shrinks to a share of the row
+		// instead of a fixed 230px, so the input keeps a usable width.
+		'  .rrws-field-label { width: 40% !important; }',
+		'}',
+		'.rrws-field-label {',
+		'  display: inline-block;',
+		'  width: 230px;',
+		'  color: var(--text-color-medium, #bbb);',
+		'  vertical-align: top;',
 		'}',
 	].join('\n');
 
@@ -795,8 +804,12 @@ return view.extend({
 			// LuCI's E() honours only ONE child argument; any extra arguments are
 			// dropped silently. That is how the first version of this page ended
 			// up rendering bare empty labels with no input beside them.
+			//
+			// The label width is a class, not an inline style: a fixed 230px label
+			// on a 390px screen left the input a sliver and opened a wide gap
+			// between the two, so the media query narrows this column on a phone.
 			var row = E('div', { style: 'margin-bottom:8px' });
-			row.appendChild(E('label', { style: 'display:inline-block;width:230px;color:#bbb' }, label));
+			row.appendChild(E('label', { 'class': 'rrws-field-label' }, label));
 			if (node) row.appendChild(node);
 			return row;
 		};
@@ -942,10 +955,13 @@ return view.extend({
 			i1Sel.appendChild(opt);
 		});
 		advBody.appendChild(f('Генерировать I1', i1Sel));
+		// max-width alongside width: on a phone a fixed 280/380px input is wider
+		// than the screen and gave the whole page a horizontal scrollbar. The
+		// max-width lets it shrink and the width in px keeps the desktop look.
 		advBody.appendChild(f('I1-sni (хост для маскировки)',
-			E('input', { type: 'text', name: 'i1_sni', style: 'width:280px', value: s.i1_sni || '' })));
+			E('input', { type: 'text', name: 'i1_sni', style: 'width:280px;max-width:100%', value: s.i1_sni || '' })));
 		advBody.appendChild(f('Свой I1',
-			E('input', { type: 'text', name: 'i1', style: 'width:380px', value: s.i1 || '', placeholder: '(по умолчанию — встроенный)' })));
+			E('input', { type: 'text', name: 'i1', style: 'width:380px;max-width:100%', value: s.i1 || '', placeholder: '(по умолчанию — встроенный)' })));
 		advBody.appendChild(f('Только порт', num('port', s.port, 0, 65535, 90, '0 — искать автоматически; иначе 1–65535')));
 
 		var fullChk = E('input', { type: 'checkbox', name: 'full' });
