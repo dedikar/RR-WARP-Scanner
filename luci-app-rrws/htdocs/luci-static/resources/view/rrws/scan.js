@@ -1309,6 +1309,8 @@ return view.extend({
 		var SORTS = [
 			{ id: 'default', label: 'По умолчанию', defDir: 'asc',
 			  title: 'Сначала с рабочим Telegram, затем стабильные, затем меньший пинг в туннеле' },
+			{ id: 'speed', label: 'Скорость', defDir: 'desc',
+			  title: 'По замеренной скорости, от большей к меньшей. Замер идёт только по эндпоинтам из теста скорости, поэтому неизмеренные оказываются внизу' },
 			{ id: 'node', label: 'Узел', defDir: 'asc',
 			  title: 'По коду узла Cloudflare' },
 			{ id: 'ping', label: 'Пинг', defDir: 'asc',
@@ -1319,29 +1321,50 @@ return view.extend({
 			  title: 'По времени отклика Telegram, от меньшего к большему' },
 		];
 
+		// How many endpoints actually carry a speed figure, so the sort bar can
+		// say so. Without it, "Скорость" looks broken: most of the list drops out
+		// of the ordering and the reason is not visible anywhere on the page.
+		var measuredCount = 0;
+		list.forEach(function(r) { if (r.speed_measured) measuredCount++; });
+
 		// Compare by the chosen key. Endpoints missing a value always sink to the
 		// bottom regardless of direction: an endpoint without a Telegram probe has
 		// nothing to compare, and floating it to the top on a descending sort would
 		// present "no data" as the best result.
+		// Each comparator takes the direction and applies it to the VALUE comparison
+		// only. Rules about missing data are applied outside the direction, because
+		// "no measurement" is not a value that can be larger or smaller - reversing
+		// it would present untested endpoints as the best ones.
+		var dir = function(c, d) { return d > 0 ? c : -c; };
+
 		var comparators = {
-			default: function(a, b) {
+			default: function(a, b, d) {
+				// This key has its own fixed order and no direction to flip: it is
+				// "what the tool recommends", not a column to sort ascending.
 				if (!!b.tg_ok !== !!a.tg_ok) return b.tg_ok ? 1 : -1;
 				if (!!a.torn !== !!b.torn) return a.torn ? 1 : -1;
 				var at = a.tun_ping_ms || a.ping_ms || 9999;
 				var bt = b.tun_ping_ms || b.ping_ms || 9999;
 				return at - bt;
 			},
-			node: function(a, b) {
-				var an = a.node || '~', bn = b.node || '~';
-				return an < bn ? -1 : (an > bn ? 1 : 0);
+			speed: function(a, b, d) {
+				var am = !!a.speed_measured, bm = !!b.speed_measured;
+				// Unmeasured always last, whatever the direction.
+				if (am !== bm) return am ? -1 : 1;
+				if (!am && !bm) return 0;
+				return dir((a.speed_mbps || 0) - (b.speed_mbps || 0), d);
 			},
-			ping: function(a, b) { return (a.ping_ms || 9999) - (b.ping_ms || 9999); },
-			tun: function(a, b) { return (a.tun_ping_ms || 9999) - (b.tun_ping_ms || 9999); },
-			tg: function(a, b) {
+			node: function(a, b, d) {
+				var an = a.node || '~', bn = b.node || '~';
+				return dir(an < bn ? -1 : (an > bn ? 1 : 0), d);
+			},
+			ping: function(a, b, d) { return dir((a.ping_ms || 9999) - (b.ping_ms || 9999), d); },
+			tun: function(a, b, d) { return dir((a.tun_ping_ms || 9999) - (b.tun_ping_ms || 9999), d); },
+			tg: function(a, b, d) {
 				// tg_ok first: an endpoint whose Telegram is blocked has no RTT, and
 				// its absence must not read as a very fast zero.
 				if (!!b.tg_ok !== !!a.tg_ok) return b.tg_ok ? 1 : -1;
-				return (a.tg_rtt_ms || 9999) - (b.tg_rtt_ms || 9999);
+				return dir((a.tg_rtt_ms || 9999) - (b.tg_rtt_ms || 9999), d);
 			},
 		};
 
@@ -1366,6 +1389,9 @@ return view.extend({
 		sortBar.appendChild(E('span', { 'class': 'rrws-sortbar-label' }, 'Сортировка:'));
 		var sortBtns = {};
 		SORTS.forEach(function(s) {
+			// A speed sort with nothing measured would just reorder noise, so the
+			// key is offered only when the run actually produced figures.
+			if (s.id === 'speed' && !measuredCount) return;
 			var b = E('button', { 'class': 'btn cbi-button', style: 'font-size:12px;padding:2px 10px' },
 				s.label);
 			b.title = s.title;
@@ -1382,6 +1408,16 @@ return view.extend({
 			sortBtns[s.id] = b;
 			sortBar.appendChild(b);
 		});
+		// Say how many rows the speed sort actually covers: with 20 measured out of
+		// 535 the ordering looks arbitrary until you know why most rows ignore it.
+		if (measuredCount) {
+			var note = E('span', { 'class': 'rrws-sortbar-label' },
+				'замерено ' + measuredCount + ' из ' + list.length);
+			note.title = 'Замер скорости идёт только по эндпоинтам, отобранным движком ' +
+				'(лучший на узел и на подсеть), поэтому сортировка по скорости ' +
+				'упорядочивает только их, а остальные остаются внизу';
+			sortBar.appendChild(note);
+		}
 		content.appendChild(sortBar);
 
 		// Mark the active key and show which way it runs, so the list order is
@@ -1389,6 +1425,9 @@ return view.extend({
 		var paintSort = function() {
 			SORTS.forEach(function(s) {
 				var b = sortBtns[s.id];
+				// A key not offered this run (speed with nothing measured) has no
+				// button; skipping it here is what keeps paintSort total.
+				if (!b) return;
 				var on = (sortId === s.id);
 				b.style.fontWeight = on ? '600' : '';
 				b.style.borderColor = on ? 'var(--primary-color-high, #3a5474)' : '';
@@ -1410,8 +1449,12 @@ return view.extend({
 			while (cardsBox.firstChild) cardsBox.removeChild(cardsBox.firstChild);
 
 			var sorted = list.slice().sort(function(a, b) {
-				var c = comparators[sortId](a, b);
-				return sortDir > 0 ? c : -c;
+				// Direction is applied by each comparator, not by negating its
+				// result here. Negating the whole comparison also flipped the
+				// "unmeasured sinks to the bottom" rule, which is what put 515
+				// endpoints without a speed figure at the TOP of a descending sort.
+				var c = comparators[sortId](a, b, sortDir);
+				return c;
 			});
 
 			// "Лучший" marks the first row that is both stable and Telegram-capable,
