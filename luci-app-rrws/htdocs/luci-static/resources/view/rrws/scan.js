@@ -218,7 +218,20 @@ function injectPageCss() {
 		'.rrws-card-torn { border-left-color: #b91c1c; opacity: .65; }',
 		// The metadata line follows the theme so it stays legible on whatever
 		// surface the card got, instead of the fixed #aaa that assumed dark.
-		'.rrws-card-meta { font-size: 12px; margin-top: 3px; color: var(--text-color-medium, #666); }',
+		//
+		// 13px rather than 12: on a router page read at arm's length the endpoint
+		// line is small enough already, and this is the line that carries the
+		// facts being compared between rows (ping, tunnel, Telegram).
+		'.rrws-card-meta { font-size: 13px; margin-top: 4px; color: var(--text-color-medium, #666); }',
+		// The actions sit at the right edge of the card, away from the values they
+		// act on: at the left they crowded the metadata line and made the card
+		// read as a block of text with buttons in the middle of it.
+		'.rrws-card-actions {',
+		'  display: flex;',
+		'  justify-content: flex-end;',
+		'  gap: 6px;',
+		'  margin-top: 6px;',
+		'}',
 	].join('\n');
 
 	var el = document.createElement('style');
@@ -1142,9 +1155,20 @@ return view.extend({
 		var title = 'Найдено: ' + (res && res.working || 0) +
 			(res && res.tg_working ? ' (с Telegram: ' + res.tg_working + ')' : '') + '.';
 
+		// Node codes present in this result, most frequent first. Read from `list`
+		// rather than the sorted copy below: this runs before the sort exists, and
+		// the counts are the same either way.
+		var nodeCounts = {};
+		list.forEach(function(r) {
+			var n = r.node;
+			if (typeof n === 'string' && n.length) nodeCounts[n] = (nodeCounts[n] || 0) + 1;
+		});
+		var nodeList = Object.keys(nodeCounts).map(function(k) { return { code: k, n: nodeCounts[k] }; });
+		nodeList.sort(function(a, b) { return b.n - a.n || (a.code < b.code ? -1 : 1); });
+
 		// Collapse control lives with the title so it stays reachable when the
 		// list is long; the button label says what the click will do.
-		var left = E('div', { style: 'display:flex;align-items:center;gap:10px' });
+		var left = E('div', { style: 'display:flex;align-items:center;gap:10px;flex-wrap:wrap' });
 		var toggleBtn = E('button', {
 			'class': 'btn cbi-button',
 			style: 'font-size:12px;padding:2px 8px',
@@ -1152,6 +1176,12 @@ return view.extend({
 		}, 'Свернуть');
 		left.appendChild(toggleBtn);
 		left.appendChild(E('div', { style: 'font-weight:600' }, title));
+		if (nodeList.length) {
+			var nodesRow = E('div', { style: 'font-size:13px;color:var(--text-color-medium, #888)' },
+				nodeList.map(function(x) { return x.code + (x.n > 1 ? ' ×' + x.n : ''); }).join('  '));
+			nodesRow.title = 'Узлы Cloudflare, на которые попали найденные эндпоинты (IATA-код города)';
+			left.appendChild(nodesRow);
+		}
 		head.appendChild(left);
 
 		var body = E('div', {});
@@ -1233,12 +1263,14 @@ return view.extend({
 			if (r.speed_measured) parts.push('скорость ' + r.speed_mbps.toFixed(1) + ' Мбит/с');
 			row.appendChild(E('div', { 'class': 'rrws-card-meta' }, parts.join(' • ')));
 
-			var actions = E('div', { style: 'margin-top:6px' });
+			var actions = E('div', { 'class': 'rrws-card-actions' });
 			var cpBtn = E('button', { 'class': 'btn cbi-button cbi-button-action', style: 'font-size:12px' }, 'Скопировать .conf');
 			cpBtn.addEventListener('click', function() { copyText(makeConf(r.endpoint), cpBtn); });
 			actions.appendChild(cpBtn);
 
-			var showBtn = E('button', { 'class': 'btn cbi-button', style: 'font-size:12px;margin-left:6px' }, 'Показать .conf');
+			// No margin-left here: the row is a flex container with a gap, so a
+			// per-button margin would double the spacing.
+			var showBtn = E('button', { 'class': 'btn cbi-button', style: 'font-size:12px' }, 'Показать .conf');
 			showBtn.addEventListener('click', function() {
 				ui.showModal('AmneziaWG .conf — ' + r.endpoint, [
 					E('pre', { style: 'white-space:pre-wrap;word-break:break-all;max-height:420px;overflow:auto;font-size:12px' },
