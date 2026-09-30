@@ -1306,19 +1306,60 @@ return view.extend({
 		// wanted ascending (fastest first) and "node" alphabetically, while a
 		// separate direction toggle would be one more control for the common case
 		// to get wrong. Clicking the active key flips the direction anyway.
+		//
+		// `bestOf` decides which row carries the ЛУЧШИЙ badge FOR THIS KEY: the
+		// badge has to mean "the best row by the column I just sorted by", or it
+		// contradicts the order on screen. It used to be a fixed rule (first
+		// stable Telegram-capable row), which meant sorting by speed still badged
+		// whatever row happened to satisfy the Telegram rule first - the one thing
+		// the ordering said was irrelevant.
 		var SORTS = [
 			{ id: 'default', label: 'По умолчанию', defDir: 'asc',
-			  title: 'Сначала с рабочим Telegram, затем стабильные, затем меньший пинг в туннеле' },
+			  title: 'Сначала с рабочим Telegram, затем стабильные, затем меньший пинг в туннеле',
+			  // The default order IS the engine's recommendation, so its best row is
+			  // the first one it put there.
+			  bestOf: function(rows) {
+				  for (var i = 0; i < rows.length; i++)
+					  if (!rows[i].torn && rows[i].tg_ok) return i;
+				  return -1;
+			  } },
 			{ id: 'speed', label: 'Скорость', defDir: 'desc',
-			  title: 'По замеренной скорости, от большей к меньшей. Замер идёт только по эндпоинтам из теста скорости, поэтому неизмеренные оказываются внизу' },
+			  title: 'По замеренной скорости, от большей к меньшей. Замер идёт только по эндпоинтам из теста скорости, поэтому неизмеренные оказываются внизу',
+			  // Fastest measured; only measured rows can hold it, since a row
+			  // without a figure has nothing to be best at.
+			  bestOf: function(rows) {
+				  for (var i = 0; i < rows.length; i++)
+					  if (rows[i].speed_measured) return i;
+				  return -1;
+			  } },
 			{ id: 'node', label: 'Узел', defDir: 'asc',
-			  title: 'По коду узла Cloudflare' },
+			  title: 'По коду узла Cloudflare',
+			  // A node code is a label, not a quality: there is no "best" node to
+			  // point at, and badging the alphabetically first row would be noise.
+			  bestOf: function() { return -1; } },
 			{ id: 'ping', label: 'Пинг', defDir: 'asc',
-			  title: 'По пингу до эндпоинта, от меньшего к большему' },
+			  title: 'По пингу до эндпоинта, от меньшего к большему',
+			  // First row that actually has a measurement: the lowest ping present.
+			  bestOf: function(rows) {
+				  for (var i = 0; i < rows.length; i++)
+					  if (rows[i].ping_ms > 0) return i;
+				  return -1;
+			  } },
 			{ id: 'tun', label: 'Туннель', defDir: 'asc',
-			  title: 'По задержке внутри туннеля, от меньшей к большей' },
+			  title: 'По задержке внутри туннеля, от меньшей к большей',
+			  bestOf: function(rows) {
+				  for (var i = 0; i < rows.length; i++)
+					  if (rows[i].measured && rows[i].tun_ping_ms > 0) return i;
+				  return -1;
+			  } },
 			{ id: 'tg', label: 'Telegram', defDir: 'asc',
-			  title: 'По времени отклика Telegram, от меньшего к большему' },
+			  title: 'По времени отклика Telegram, от меньшего к большему',
+			  // Lowest Telegram RTT, so only a row that actually answered counts.
+			  bestOf: function(rows) {
+				  for (var i = 0; i < rows.length; i++)
+					  if (rows[i].tg_ok && rows[i].tg_rtt_ms > 0) return i;
+				  return -1;
+			  } },
 		];
 
 		// How many endpoints actually carry a speed figure, so the sort bar can
@@ -1336,6 +1377,17 @@ return view.extend({
 		// "no measurement" is not a value that can be larger or smaller - reversing
 		// it would present untested endpoints as the best ones.
 		var dir = function(c, d) { return d > 0 ? c : -c; };
+
+		// Compare two possibly-absent numbers so that absence always sorts last,
+		// whichever direction is in force. A missing value is not a small one:
+		// letting "0 / not measured" act as a value put untested endpoints at the
+		// top of a descending sort.
+		var missingLast = function(a, b) {
+			var am = (a > 0), bm = (b > 0);
+			if (am !== bm) return am ? -1 : 1;
+			if (!am && !bm) return 0;
+			return a - b;
+		};
 
 		var comparators = {
 			default: function(a, b, d) {
@@ -1358,8 +1410,18 @@ return view.extend({
 				var an = a.node || '~', bn = b.node || '~';
 				return dir(an < bn ? -1 : (an > bn ? 1 : 0), d);
 			},
-			ping: function(a, b, d) { return dir((a.ping_ms || 9999) - (b.ping_ms || 9999), d); },
-			tun: function(a, b, d) { return dir((a.tun_ping_ms || 9999) - (b.tun_ping_ms || 9999), d); },
+			ping: function(a, b, d) {
+				return dir(missingLast(a.ping_ms, b.ping_ms), d);
+			},
+			tun: function(a, b, d) {
+				// "measured" is the engine's flag for "this endpoint was probed in
+				// the tunnel"; a zero without it means no measurement, not a fast one.
+				var am = a.measured && a.tun_ping_ms > 0;
+				var bm = b.measured && b.tun_ping_ms > 0;
+				if (am !== bm) return am ? -1 : 1;
+				if (!am && !bm) return 0;
+				return dir(a.tun_ping_ms - b.tun_ping_ms, d);
+			},
 			tg: function(a, b, d) {
 				// tg_ok first: an endpoint whose Telegram is blocked has no RTT, and
 				// its absence must not read as a very fast zero.
@@ -1457,12 +1519,21 @@ return view.extend({
 				return c;
 			});
 
-			// "Лучший" marks the first row that is both stable and Telegram-capable,
-			// which is a property of the data, not of the current sort. Under an
-			// explicit sort it can sit anywhere in the list, so it is found by scan
-			// rather than assumed to be first.
+			// "ЛУЧШИЙ" follows the sort: it marks the first row in the order shown
+			// that actually has a value in the sorted column - which, since the
+			// list is already sorted, IS the best row by that column. Sorting by
+			// node has no best row and shows no badge.
+			//
+			// Searching the displayed order rather than the ascending one keeps
+			// this correct for both directions without any index arithmetic: the
+			// first measured row is the fastest under a descending sort and the
+			// slowest under an ascending one, and each is what the order claims.
 			var bestIdx = -1;
-			sorted.forEach(function(r, i) { if (bestIdx < 0 && !r.torn && r.tg_ok) bestIdx = i; });
+			for (var si = 0; si < SORTS.length; si++) {
+				if (SORTS[si].id !== sortId) continue;
+				bestIdx = SORTS[si].bestOf(sorted);
+				break;
+			}
 
 			sorted.forEach(function(r, i) {
 				var isBest = (i === bestIdx);
