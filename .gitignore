@@ -40,3 +40,6 @@ backup/router-*/
 # Source snapshots duplicate what the git tag already pins (v0.3.1-r38-backup),
 # and 2.7 MB of tarball in history buys nothing the tag does not.
 backup/*.tar.gz
+
+# Harness-generated exclude file: not part of the project.
+.zcodeignore
