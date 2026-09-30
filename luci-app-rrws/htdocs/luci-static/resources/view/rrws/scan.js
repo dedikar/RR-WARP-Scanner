@@ -914,6 +914,13 @@ return view.extend({
 		if (s.tun_ping) tpChk.checked = true;
 		sec.appendChild(f('', chkLabel(tpChk, ' Измерять задержку и потери внутри туннеля (TUN PING / LOSS)')));
 
+		// The three switches sit together and the fields they control follow, so the
+		// block reads as "switches, then the settings those switches unlock" rather
+		// than alternating between the two.
+		var stChk = E('input', { type: 'checkbox', name: 'stable_only' });
+		if (s.stable_only) stChk.checked = true;
+		sec.appendChild(f('', chkLabel(stChk, ' Отображать только стабильные (без обрывов и потерь)')));
+
 		// Burst length for the durability check. The engine sends this many echoes
 		// 200 ms apart and calls a tunnel torn if the answer stops mid-burst, so a
 		// longer burst catches a DPI cut that happens seconds in - at two seconds
@@ -942,10 +949,6 @@ return view.extend({
 		tpChk.addEventListener('change', syncTpUi);
 		syncTgUi();
 		syncTpUi();
-
-		var stChk = E('input', { type: 'checkbox', name: 'stable_only' });
-		if (s.stable_only) stChk.checked = true;
-		sec.appendChild(f('', chkLabel(stChk, ' Отображать только стабильные (без обрывов и потерь)')));
 
 		// --- exclusions: checkbox dropdowns, not free-text IATA entry -------
 		// Each pick-list is a native LuCI multi-select. The engine wants the three
