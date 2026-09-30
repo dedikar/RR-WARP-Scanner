@@ -6,9 +6,9 @@ removed from the working tree.
 
 Set them before running, or pass them on the command line:
 
-    Linux/macOS:   ROUTER_HOST=192.0.2.1 ROUTER_USER=root ROUTER_PASS=... python acceptance.py
-    Windows (cmd): set ROUTER_HOST=192.0.2.1 && set ROUTER_USER=root && set ROUTER_PASS=... && python acceptance.py
-    PowerShell:    $env:ROUTER_HOST='192.0.2.1'; $env:ROUTER_USER='root'; $env:ROUTER_PASS='...'; python acceptance.py
+    Linux/macOS:   ROUTER_HOST=... ROUTER_USER=... ROUTER_PASS=... python acceptance.py
+    Windows (cmd): set ROUTER_HOST=... && set ROUTER_USER=... && set ROUTER_PASS=... && python acceptance.py
+    PowerShell:    $env:ROUTER_HOST='...'; $env:ROUTER_USER='...'; $env:ROUTER_PASS='...'; python acceptance.py
 
 There is deliberately NO default password.
 """
@@ -33,7 +33,7 @@ def _env(name, default=None, required=False):
 
 def connect(timeout=20):
     """Open an SSH session to the test router using the environment."""
-    host = _env('ROUTER_HOST', '192.0.2.1')
+    host = _env('ROUTER_HOST', required=True)
     user = _env('ROUTER_USER', 'root')
     password = _env('ROUTER_PASS', required=True)
     port = int(_env('ROUTER_PORT', '22'))

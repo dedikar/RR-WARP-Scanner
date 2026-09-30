@@ -7,7 +7,7 @@
 # binary that fails on the router with "Exec format error".
 set -e
 export PATH=/usr/local/go/bin:$PATH
-cd <repo>/engine
+cd "$(dirname "$0")/../engine"
 
 export CGO_ENABLED=0
 export GOOS=linux
@@ -16,7 +16,7 @@ export GOOS=linux
 VAR="GO""ARCH"
 export "$VAR=arm64"
 
-OUT="${1:-<home>/rrws-build.bin}"
+OUT="${1:-$PWD/rrws-build.bin}"
 go build -trimpath -ldflags "-s -w" -o "$OUT" .
 file "$OUT" | cut -c1-70
 md5sum "$OUT"

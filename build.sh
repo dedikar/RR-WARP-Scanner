@@ -23,7 +23,7 @@ GO_BIN="rrws"
 GOARCH_TARGET="arm64"
 
 # Go is not always on PATH in a bare WSL shell, and WSL interop puts the Windows
-# toolchain (/mnt/c/Program Files/Go/bin, go1.27.1 windows/amd64) ahead of it.
+# toolchain (a Windows go.exe under /mnt/c) ahead of it.
 # A Windows go.exe CAN cross-compile linux/arm64 and the result links, but the
 # binaries trap with SIGILL ("Illegal instruction", rc 132) on the router's
 # Cortex-A53 - measured on 2026-09-29, which cost an afternoon. So the Linux

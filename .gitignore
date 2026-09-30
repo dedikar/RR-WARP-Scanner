@@ -43,3 +43,7 @@ backup/*.tar.gz
 
 # Harness-generated exclude file: not part of the project.
 .zcodeignore
+
+# Agent working notes: they carry local paths, the router address and the
+# machine layout. Useful across sessions, not something to publish.
+AGENTS.md
