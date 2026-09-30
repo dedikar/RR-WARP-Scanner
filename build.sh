@@ -291,7 +291,7 @@ EOF
 		--info "version:${VERSION}" \
 		--info "arch:noarch" \
 		--info "description:${DESC}" \
-		--info "license:MIT" \
+		--info "license:Apache-2.0" \
 		--info "origin:${PKG_NAME}" \
 		--info "build-time:$(date +%s)" \
 		--info "depends:libc" \
