@@ -8,6 +8,8 @@
 [![Engine](https://img.shields.io/badge/engine-Go%2C%20userspace%20AmneziaWG-orange)](#как-это-работает)
 [![License](https://img.shields.io/badge/license-Apache--2.0-lightgrey)](LICENSE)
 
+> **Обратите внимание, это бета. Наличие багов гарантированно.**
+
 LuCI-приложение для роутеров RouteRich. Сканирует пул эндпоинтов Cloudflare
 WARP, проверяет каждый настоящим туннелем, измеряет задержку и потери, пробует
 дотянуться до дата-центров Telegram и отдаёт готовый `.conf` для лучшего.
