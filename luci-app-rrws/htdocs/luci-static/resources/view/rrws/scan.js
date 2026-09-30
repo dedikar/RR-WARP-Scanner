@@ -254,6 +254,19 @@ function injectPageCss() {
 		'  color: var(--text-color-medium, #bbb);',
 		'  vertical-align: top;',
 		'}',
+		// Sort keys, sitting between the summary and the cards.
+		'.rrws-sortbar {',
+		'  display: flex;',
+		'  align-items: center;',
+		'  gap: 6px;',
+		'  flex-wrap: wrap;',
+		'  margin: 4px 0 10px 0;',
+		'}',
+		'.rrws-sortbar-label {',
+		'  font-size: 12px;',
+		'  color: var(--text-color-medium, #888);',
+		'  margin-right: 2px;',
+		'}',
 	].join('\n');
 
 	var el = document.createElement('style');
@@ -1274,14 +1287,6 @@ return view.extend({
 		}
 		head.appendChild(left);
 
-		var body = E('div', {});
-		var collapsed = false;
-		toggleBtn.addEventListener('click', function() {
-			collapsed = !collapsed;
-			body.style.display = collapsed ? 'none' : '';
-			toggleBtn.textContent = collapsed ? 'Развернуть' : 'Свернуть';
-		});
-
 		if (list.length) {
 			var dlBtn = E('button', { 'class': 'btn cbi-button' }, 'Скачать всё .txt');
 			dlBtn.addEventListener('click',function() {
@@ -1295,11 +1300,60 @@ return view.extend({
 			});
 			head.appendChild(dlBtn);
 		}
+		// Sort keys offered as buttons under the summary line.
+		//
+		// Each has a natural default direction, because "ping" is almost always
+		// wanted ascending (fastest first) and "node" alphabetically, while a
+		// separate direction toggle would be one more control for the common case
+		// to get wrong. Clicking the active key flips the direction anyway.
+		var SORTS = [
+			{ id: 'default', label: 'По умолчанию', defDir: 'asc',
+			  title: 'Сначала с рабочим Telegram, затем стабильные, затем меньший пинг в туннеле' },
+			{ id: 'node', label: 'Узел', defDir: 'asc',
+			  title: 'По коду узла Cloudflare' },
+			{ id: 'ping', label: 'Пинг', defDir: 'asc',
+			  title: 'По пингу до эндпоинта, от меньшего к большему' },
+			{ id: 'tun', label: 'Туннель', defDir: 'asc',
+			  title: 'По задержке внутри туннеля, от меньшей к большей' },
+			{ id: 'tg', label: 'Telegram', defDir: 'asc',
+			  title: 'По времени отклика Telegram, от меньшего к большему' },
+		];
+
+		// Compare by the chosen key. Endpoints missing a value always sink to the
+		// bottom regardless of direction: an endpoint without a Telegram probe has
+		// nothing to compare, and floating it to the top on a descending sort would
+		// present "no data" as the best result.
+		var comparators = {
+			default: function(a, b) {
+				if (!!b.tg_ok !== !!a.tg_ok) return b.tg_ok ? 1 : -1;
+				if (!!a.torn !== !!b.torn) return a.torn ? 1 : -1;
+				var at = a.tun_ping_ms || a.ping_ms || 9999;
+				var bt = b.tun_ping_ms || b.ping_ms || 9999;
+				return at - bt;
+			},
+			node: function(a, b) {
+				var an = a.node || '~', bn = b.node || '~';
+				return an < bn ? -1 : (an > bn ? 1 : 0);
+			},
+			ping: function(a, b) { return (a.ping_ms || 9999) - (b.ping_ms || 9999); },
+			tun: function(a, b) { return (a.tun_ping_ms || 9999) - (b.tun_ping_ms || 9999); },
+			tg: function(a, b) {
+				// tg_ok first: an endpoint whose Telegram is blocked has no RTT, and
+				// its absence must not read as a very fast zero.
+				if (!!b.tg_ok !== !!a.tg_ok) return b.tg_ok ? 1 : -1;
+				return (a.tg_rtt_ms || 9999) - (b.tg_rtt_ms || 9999);
+			},
+		};
+
+		var sortId = 'default';
+		var sortDir = 1;   // 1 ascending, -1 descending
+
+		var content = E('div', {});
 		box.appendChild(head);
-		box.appendChild(body);
+		box.appendChild(content);
 
 		if (!list.length) {
-			body.appendChild(E('div', { style: 'color:#888;padding:8px 0' },
+			content.appendChild(E('div', { style: 'color:#888;padding:8px 0' },
 				'Рабочих эндпоинтов не найдено.'));
 			// Nothing to fold when the list is empty.
 			toggleBtn.disabled = true;
@@ -1307,22 +1361,68 @@ return view.extend({
 			return;
 		}
 
-		// Build one block per endpoint, including the torndown ones so the picture
-		// is honest, but never marking them usable.
-		var sorted = list.slice().sort(function(a, b) {
-			// Telegram-capable first, then stable, then lower in-tunnel latency.
-			if (!!b.tg_ok !== !!a.tg_ok) return b.tg_ok ? 1 : -1;
-			if (!!a.torn !== !!b.torn) return a.torn ? 1 : -1;
-			var at = a.tun_ping_ms || a.ping_ms || 9999;
-			var bt = b.tun_ping_ms || b.ping_ms || 9999;
-			return at - bt;
+		// The sort bar lives directly under the summary, above the cards.
+		var sortBar = E('div', { 'class': 'rrws-sortbar' });
+		sortBar.appendChild(E('span', { 'class': 'rrws-sortbar-label' }, 'Сортировка:'));
+		var sortBtns = {};
+		SORTS.forEach(function(s) {
+			var b = E('button', { 'class': 'btn cbi-button', style: 'font-size:12px;padding:2px 10px' },
+				s.label);
+			b.title = s.title;
+			b.addEventListener('click', function() {
+				if (sortId === s.id) {
+					sortDir = -sortDir;      // same key again: flip the direction
+				} else {
+					sortId = s.id;
+					sortDir = (s.defDir === 'desc') ? -1 : 1;
+				}
+				paintSort();
+				renderCards();
+			});
+			sortBtns[s.id] = b;
+			sortBar.appendChild(b);
 		});
+		content.appendChild(sortBar);
 
-		var bestIdx = -1;
-		sorted.forEach(function(r, i) { if (bestIdx < 0 && !r.torn && r.tg_ok) bestIdx = i; });
+		// Mark the active key and show which way it runs, so the list order is
+		// never a guess.
+		var paintSort = function() {
+			SORTS.forEach(function(s) {
+				var b = sortBtns[s.id];
+				var on = (sortId === s.id);
+				b.style.fontWeight = on ? '600' : '';
+				b.style.borderColor = on ? 'var(--primary-color-high, #3a5474)' : '';
+				if (on && sortId !== 'default')
+					b.textContent = s.label + (sortDir > 0 ? ' ↑' : ' ↓');
+				else
+					b.textContent = s.label;
+			});
+		};
+		paintSort();
 
-		sorted.forEach(function(r, i) {
-			var isBest = (i === bestIdx);
+		var cardsBox = E('div', {});
+		content.appendChild(cardsBox);
+
+		// Rebuild the card list for the current sort. Kept as a function so the
+		// sort buttons re-render only the cards, not the whole panel - rebuilding
+		// the header would drop the sort bar the click came from.
+		var renderCards = function() {
+			while (cardsBox.firstChild) cardsBox.removeChild(cardsBox.firstChild);
+
+			var sorted = list.slice().sort(function(a, b) {
+				var c = comparators[sortId](a, b);
+				return sortDir > 0 ? c : -c;
+			});
+
+			// "Лучший" marks the first row that is both stable and Telegram-capable,
+			// which is a property of the data, not of the current sort. Under an
+			// explicit sort it can sit anywhere in the list, so it is found by scan
+			// rather than assumed to be first.
+			var bestIdx = -1;
+			sorted.forEach(function(r, i) { if (bestIdx < 0 && !r.torn && r.tg_ok) bestIdx = i; });
+
+			sorted.forEach(function(r, i) {
+				var isBest = (i === bestIdx);
 			// The left stripe carries the meaning (best / torn / plain) and the rest
 			// of the card's surface comes from the .rrws-card rules, so the list
 			// stays readable at 141 entries instead of turning into one grey slab.
@@ -1410,8 +1510,21 @@ return view.extend({
 			actions.appendChild(showBtn);
 			row.appendChild(actions);
 
-			body.appendChild(row);
+				cardsBox.appendChild(row);
+			});
+		};
+
+		// The collapse control hides the whole content block, so it also hides the
+		// sort bar - that is the intent, and collapsing stays a way to get the list
+		// out of the way entirely.
+		var collapsed = false;
+		toggleBtn.addEventListener('click', function() {
+			collapsed = !collapsed;
+			content.style.display = collapsed ? 'none' : '';
+			toggleBtn.textContent = collapsed ? 'Развернуть' : 'Свернуть';
 		});
+
+		renderCards();
 	},
 
 	renderLog: function() {
