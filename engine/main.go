@@ -203,10 +203,23 @@ func runScanCmd(ctx context.Context, opts options) error {
 		pools = poolsWithHits(ph)
 	}
 
+	// The speed phase fills r.speed, so it runs BEFORE any report: the JSON
+	// contract and the tables both read it. On a filtered-empty result the
+	// phase is a no-op.
+	if (opts.speed || opts.bestBy == bestKeySpeed) && showsSpeed(opts) {
+		if !opts.speed {
+			fmt.Fprintln(os.Stderr, errPal.dim("\n-best-by speed ranks by throughput, so the speedtest phase runs even without -speed"))
+		}
+		// pe, not nil: the speed phase reports its own progress, and passing nil
+		// meant its barBegin/probed events never reached the progress file - the
+		// UI showed a finished scan (100%) while downloads were still running.
+		runWithUI(opts, cancel, false, "", "q to skip the rest", pe, func(emit emitter) {
+			measureSpeed(ctx, ph, time.Duration(opts.timeoutSec)*time.Second, opts.speedTop, emit)
+		})
+	}
+
 	// JSON is the machine contract: an empty result is a valid answer, so it is
-	// emitted before the human "nothing found" failure path. It must come AFTER
-	// the speed phase - that phase is what fills r.speed, so writing the report
-	// first shipped every speed field as zero and the UI showed no speeds at all.
+	// emitted before the human "nothing found" failure path.
 	if opts.jsonOut {
 		if err := writeJSON(os.Stdout, jsonFromPhase(ph)); err != nil {
 			return err
@@ -218,18 +231,6 @@ func runScanCmd(ctx context.Context, opts options) error {
 	// file whose only content is "No working endpoints found".
 	if !anyEndpoint(ph) {
 		return fmt.Errorf("%s", noEndpointMsg(opts))
-	}
-
-	if (opts.speed || opts.bestBy == bestKeySpeed) && showsSpeed(opts) {
-		if !opts.speed {
-			fmt.Fprintln(os.Stderr, errPal.dim("\n-best-by speed ranks by throughput, so the speedtest phase runs even without -speed"))
-		}
-		// pe, not nil: the speed phase reports its own progress, and passing nil
-		// meant its barBegin/probed events never reached the progress file - the
-		// UI showed a finished scan (100%) while downloads were still running.
-		runWithUI(opts, cancel, false, "", "q to skip the rest", pe, func(emit emitter) {
-			measureSpeed(ctx, ph, time.Duration(opts.timeoutSec)*time.Second, opts.speedTop, emit)
-		})
 	}
 
 	// Held rather than returned: the scan itself succeeded, so the report file is

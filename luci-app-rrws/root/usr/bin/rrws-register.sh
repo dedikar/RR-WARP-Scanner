@@ -42,6 +42,7 @@ if ok "$rc"; then
 	log "account registered (standard path)"
 	exit 0
 fi
+log "stage 1 failed (engine rc=$rc)"
 
 if listening "$ZB"; then
 	log "stage 2: registering through zeroblock ($ZB)"
@@ -51,6 +52,7 @@ if listening "$ZB"; then
 		log "account registered (zeroblock)"
 		exit 0
 	fi
+	log "stage 2 failed (engine rc=$rc)"
 else
 	log "stage 2: zeroblock not detected on $ZB, skipping"
 fi
@@ -76,6 +78,7 @@ if listening "$OP"; then
 		log "account registered (opera-proxy)"
 		exit 0
 	fi
+	log "stage 3 failed (engine rc=$rc)"
 else
 	log "opera-proxy did not come up on $OP"
 fi
