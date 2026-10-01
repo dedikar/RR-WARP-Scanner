@@ -11,11 +11,9 @@ import (
 	"time"
 )
 
-// routerLocation resolves the timezone the way busybox date(1) does: /etc/TZ
-// holds a POSIX TZ string ("MSK-3") and the TZ environment variable is often
-// unset. Go would otherwise fall back to UTC, and the merged log - which mixes
-// these lines with the backend's date(1) lines - would show the same event three
-// hours apart.
+// Resolve the TZ the way busybox date(1) does: /etc/TZ holds a POSIX TZ
+// string and TZ is often unset. Go would fall back to UTC and the merged
+// log would place the same event hours away from the backend's lines.
 func routerLocation() *time.Location {
 	if tz := os.Getenv("TZ"); tz != "" {
 		if loc, err := time.LoadLocation(tz); err == nil {
@@ -43,14 +41,9 @@ func routerLocation() *time.Location {
 	return time.Local
 }
 
-// posixFixedZone parses the fixed-offset subset of POSIX TZ strings that
-// OpenWrt writes, e.g. "MSK-3" (UTC+3), "<+05>-5" (UTC+5) or "UTC0".
-//
-// POSIX puts the sign the opposite way from what it reads as: the number is what
-// you add to local time to reach UTC, so "MSK-3" means local = UTC+3.
-// FixedZone wants an east-positive offset, so the parsed value is used as-is
-// after "-" and negated after "+". Getting this backwards put the engine hours
-// away from the backend rather than aligned with it.
+// Fixed-offset POSIX TZ strings ("MSK-3" is UTC+3): the sign is the
+// opposite of what it reads as, and getting it backwards put the engine
+// hours away from the backend.
 func posixFixedZone(spec string) *time.Location {
 	// A quoted name ("<+05>") may contain digits and signs of its own, so it is
 	// skipped whole; scanning for the first digit would otherwise read the "+05"
@@ -98,14 +91,9 @@ func posixFixedZone(spec string) *time.Location {
 	return time.FixedZone(name, sign*hours*3600)
 }
 
-// The LuCI page merges this engine's stderr with the backend's own log into one
-// chronological view, so every line needs a timestamp. Doing it by wrapping the
-// writer, rather than editing each call site, means every existing and future
-// Fprintln gets it for free.
-//
-// The format matches the backend's (`2006-01-02 15:04:05`) so the merged log
-// sorts and reads as a single stream. The `engine` tag distinguishes the source
-// from the backend's `rpcd` lines at a glance.
+// The LuCI page merges this stderr with the backend's log, so every line
+// needs a timestamp in the backend's own format; the `engine` tag marks
+// the source.
 type timestampWriter struct {
 	mu  sync.Mutex
 	dst io.Writer

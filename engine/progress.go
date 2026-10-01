@@ -8,18 +8,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// Progress file for the LuCI front end.
+// Progress file for the LuCI front end, which polls over ubus and cannot
+// stream stdout. One line, rewritten atomically (tmp + rename):
 //
-// The page cannot stream stdout: it polls over ubus while the scan runs, and it
-// tears the rpc request down after ~20s. So the scan writes a single small file
-// the backend reads on every poll, the same way the shell engine wrote
-// /tmp/wscan/progress. Format, one line, rewritten whole each time:
-//
-//	phase1:<scanned>:<total>      port discovery
-//	phase2:<scanned>:<total>      tunnel verification
-//	done
-//
-// Writes are atomic (tmp + rename) so a poll never reads a half-written line.
+//	phase1:<scanned>:<total> | phase2:<scanned>:<total> | done
 type progressWriter struct {
 	path string
 	mu   sync.Mutex
@@ -107,10 +99,8 @@ func (pe *progressEmitter) emit(msg tea.Msg) {
 			pe.pw.set(pe.label, pe.done, pe.total)
 		}
 	case barBeginMsg:
-		// The scan emits one barBegin for phase 2, and the speed phase emits
-		// another after it. Both were labelled "phase2", so the speed phase never
-		// appeared in the progress file and the UI showed a finished scan while
-		// downloads were still running. Tell them apart by who started them.
+		// The speed phase emits a barBegin after the scan's own; tell the two
+		// apart by who started them.
 		pe.total = m.total
 		pe.done = 0
 		if pe.sawDone {

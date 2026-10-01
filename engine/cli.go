@@ -131,11 +131,8 @@ func main() {
 	stripLoaderArg()
 	enableVirtualTerminal()
 
-	// When stderr is not a terminal the output is being captured - the LuCI
-	// backend redirects it into /tmp/rrws-state/scan.log. Timestamping it lets
-	// the page merge this log with its own in chronological order. On a real
-	// terminal the TUI draws the screen itself, so timestamps there would only
-	// corrupt the layout.
+	// Captured stderr (the LuCI backend redirects it) gets timestamps so the
+	// page can merge logs chronologically; a terminal keeps the plain TUI.
 	if !isTerminal(os.Stderr) {
 		flush := enableTimestamps()
 		defer flush()

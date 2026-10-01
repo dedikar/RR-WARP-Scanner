@@ -32,16 +32,10 @@ type dialFunc func(ctx context.Context, addr string) (net.Conn, error)
 // allDCs is the reachedDCs mask with every entry of telegramDCs set.
 var allDCs = uint8(1<<len(telegramDCs)) - 1
 
-// Every address at once under one deadline. Walking them in turn would cost
-// len(addrs) x timeout on a blocked exit, where each dial runs the clock out
-// in full - a scan pays that per endpoint.
-//
-// An account lives on one DC and the client cannot pick another, so an exit
-// where only some DCs answer is an exit where some accounts never connect
-// (seen live: WARP exits in FRA reached DC1/3/5 while DC2/4 never answered,
-// and Telegram Desktop sat in "connecting..."). reached is therefore a bitmask
-// (bit i = addrs[i]) and the caller wants all of it set; rtt is the slowest
-// answer, since the DC a client sits on may well be that one.
+// Every address at once under one deadline: sequential dials cost
+// len(addrs) x timeout on a blocked exit. reached is a bitmask of DCs that
+// answered and the caller wants all of it set; rtt is the slowest answer,
+// since the DC a client sits on may well be that one.
 func reachedDCs(ctx context.Context, dial dialFunc, addrs []string, timeout time.Duration) (rtt time.Duration, reached uint8) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

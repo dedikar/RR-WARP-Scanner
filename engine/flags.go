@@ -58,10 +58,8 @@ type options struct {
 	i1Explicit     bool
 	tunPingCheck   bool
 	speed          bool
-	// speedTop caps how many endpoints the speed phase measures. 0 keeps the
-	// upstream behaviour (every endpoint the tables pick), which on a full pool
-	// run means dozens of multi-second downloads - far too long for a router page
-	// the user is watching.
+	// speedTop caps the speed phase; 0 keeps the upstream behaviour of
+	// measuring every endpoint the tables pick - too slow for a router page.
 	speedTop     int
 	tg           bool
 	tgOnly       bool
@@ -439,10 +437,8 @@ func validateThrough(fs *flag.FlagSet, o options) {
 	}
 }
 
-// Every inner tunnel shares the one outer device and its one netstack, and that
-// is the bottleneck: measured on the same 28 endpoints, 28/28 worked at 1 worker,
-// 12/28 at 3 and 3/28 at the usual 10, the rest reported as torn down. An
-// explicit -jt still wins - the user may be nesting through a fatter path.
+// Every inner tunnel shares the one outer netstack, and that is the
+// bottleneck: parallel workers just tear each other down.
 const nestedTunnelJobs = 1
 
 func applyNestedJobs(fs *flag.FlagSet, o *options) {

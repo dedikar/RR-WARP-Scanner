@@ -55,14 +55,9 @@ const (
 	junkCountLimitMax = 128
 )
 
-
-// The router build defaults to AmneziaWG, not plain WireGuard. Measured on the
-// target network (RouteRich, 2026-09-29): "-p wg" brought up handshakes that then
-// passed no data at all - every endpoint came back torn with 90-100% loss and no
-// Telegram DC answered, which is exactly the DPI teardown the obfuscation exists
-// to defeat. The same /24 under "-p awg" gave 12/12 working, 4 of them reaching
-// all five Telegram DCs. Upstream keeps "wg" as its default because it targets
-// unrestricted hosts; here it would mean shipping an app that finds nothing.
+// The router build defaults to AmneziaWG: on the target network plain
+// WireGuard brought up handshakes that passed no data at all (DPI teardown).
+// Upstream keeps "wg" for unrestricted hosts; here it would find nothing.
 const defaultProto = protoAWG
 
 const (

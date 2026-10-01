@@ -110,10 +110,8 @@ func reachablePorts(ctx context.Context, run protoRun, ips []netip.Addr, timeout
 	return probePorts(ctx, run, sampled, extendedWarpPorts, timeout, jobs, emit, "Phase 1: sweeping alternate WARP ports")
 }
 
-// One address at a time per tunnel, so the answer stays one address's port list
-// rather than a mix: the first address that answers wins and cancels the rest.
-// Sequentially this cost 4+50 ports x -timeout per dead address, measured at 109s
-// on an address that answers nothing, times the whole sample.
+// One address at a time per tunnel: the first address that answers wins and
+// cancels the rest, so the answer is one address's port list rather than a mix.
 func probePorts(ctx context.Context, run protoRun, ips []netip.Addr, ports []int, timeout time.Duration, jobs int, emit emitter, label string) ([]int, error) {
 	emit(barBeginMsg{label: label, total: len(ips)})
 	ctx, cancel := context.WithCancel(ctx)

@@ -502,10 +502,8 @@ func runScanUI(ctx context.Context, cancel context.CancelFunc, opts options, run
 }
 
 func runWithUI(opts options, cancel context.CancelFunc, ping bool, header, quitHint string, pe *progressEmitter, work func(emitter)) error {
-	// One progressEmitter for the whole run, not one per call: the scan and the
-	// speed phase share the progress file, and a fresh emitter forgot that the
-	// scan had already finished - so the speed phase was labelled "phase2" again
-	// and the UI could not tell it apart.
+	// One progressEmitter for the whole run: the speed phase must not re-use a
+	// label the scan already closed.
 	wrap := func(inner emitter) emitter {
 		if pe == nil {
 			return inner

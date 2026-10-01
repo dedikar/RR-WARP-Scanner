@@ -453,12 +453,8 @@ func obtainAccount(ctx context.Context, o options, ips []netip.Addr, timeout tim
 	origI1, origLabel := awgI1, genI1Label
 	awgRun := protoRun{kindAWG, protoAWG}
 
-	// The I1 masks are independent, so they all probe at once: run one after
-	// another, their budgets add up to minutes of guaranteed failure on a
-	// blocked network. One shared budget covers the whole sweep, the first
-	// account wins, and the losers are cancelled. On a clean network two
-	// candidates can both mint an account - the duplicate is discarded, it
-	// costs one wasted registration at worst.
+	// The masks are independent: they all probe at once under one shared
+	// budget, the first account wins, the losers are cancelled.
 	tunnelCtx, cancel := context.WithTimeout(ctx, tunnelDiscoveryBudget)
 	defer cancel()
 
