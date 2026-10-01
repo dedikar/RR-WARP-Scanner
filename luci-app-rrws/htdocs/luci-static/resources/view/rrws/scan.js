@@ -632,9 +632,11 @@ return view.extend({
 		// --- log ----------------------------------------------------------
 		wrap.appendChild(this.renderLog());
 
-		// resume whatever was running before the page was opened
-		window.setTimeout(function() { self.resumeScan(); }, 0);
-		window.setTimeout(function() { self.startLogAutoRefresh(); }, 0);
+		// All polling goes through LuCI's own queue (L.Poll) instead of
+		// hand-rolled setTimeout chains: one serialized round per tick, and the
+		// queue is emptied when the page is left, so no timer outlives the view.
+		self.startLogAutoRefresh();
+		self.resumeScan();
 
 		return wrap;
 	},
@@ -769,11 +771,18 @@ return view.extend({
 		var self = this;
 		var tries = 0;
 		var label = btn.textContent;
+
+		// Runs as a task in LuCI's poll queue; every exit path removes it, so a
+		// finished registration never leaves a timer behind.
+		var finish = function() {
+			if (self.regPollHandle) { L.Poll.remove(self.regPollHandle); self.regPollHandle = null; }
+		};
 		var tick = function() {
 			if (++tries > 90) {   // ~3 minutes
 				// A timeout is not a cause: pull the log and show what the engine
 				// actually said last, instead of hiding the reason behind a
 				// generic message.
+				finish();
 				self.refreshRegLog().then(function(text) {
 					if (self.regStatusEl) {
 						self.regStatusEl.textContent = text && text.length
@@ -785,8 +794,9 @@ return view.extend({
 				});
 				return;
 			}
-			callAccountStatus().then(function(a) {
+			return callAccountStatus().then(function(a) {
 				if (a && a.registered && !a.registering) {
+					finish();
 					if (self.regStatusEl) self.regStatusEl.textContent = 'Аккаунт готов.';
 					window.location.reload();
 					return;
@@ -797,6 +807,7 @@ return view.extend({
 				// once nothing is running and no account appeared, it failed.
 				self.refreshRegLog().then(function(text) {
 					if (!a || !a.registering) {
+						finish();
 						if (self.regStatusEl) {
 							self.regStatusEl.textContent = text && text.length
 								? 'Регистрация не удалась — причина в логе ниже.'
@@ -807,11 +818,10 @@ return view.extend({
 						return;
 					}
 					if (self.regStatusEl) self.regStatusEl.textContent = 'Регистрация... (' + tries + ' с)';
-					window.setTimeout(tick, 2000);
 				});
-			}, function() { window.setTimeout(tick, 2000); });
+			}, function() { /* a failed round is retried on the next one */ });
 		};
-		tick();
+		this.regPollHandle = L.Poll.add(tick, 2);
 	},
 
 	renderScan: function(s, res0) {
@@ -1223,25 +1233,24 @@ return view.extend({
 		var startedAt = Date.now();
 		var GRACE_MS = 15000;
 
-		var tick = function() {
-			callScanStatus().then(function(st) {
-				if (!st) { window.setTimeout(tick, 3000); return; }
+		// One task in LuCI's poll queue, removed when the run is over.
+		if (this.scanPollHandle) L.Poll.remove(this.scanPollHandle);
+		this.scanPollHandle = L.Poll.add(function() {
+			return callScanStatus().then(function(st) {
+				if (!st) return;
 				self.showStatus(st);
 
 				if (st.running) sawRunning = true;
 
 				var graceOver = (Date.now() - startedAt) > GRACE_MS;
-				if (st.running || (!sawRunning && !graceOver)) {
-					window.setTimeout(tick, 2000);
-					return;
-				}
+				if (st.running || (!sawRunning && !graceOver)) return;
 
+				if (self.scanPollHandle) { L.Poll.remove(self.scanPollHandle); self.scanPollHandle = null; }
 				if (self.startBtn) self.startBtn.disabled = false;
 				if (self.stopBtn) self.stopBtn.disabled = true;
 				callScanResult().then(function(r) { self.renderResults(r); });
-			}, function() { window.setTimeout(tick, 3000); });
-		};
-		tick();
+			}, function() { /* a failed round is retried on the next one */ });
+		}, 2);
 	},
 
 	showStatus: function(st) {
@@ -1796,19 +1805,21 @@ return view.extend({
 
 	startLogAutoRefresh: function() {
 		var self = this;
-		var tick = function() {
+		// A permanent task in LuCI's poll queue; the gates decide per tick, so
+		// the switches keep working without re-registering anything. The queue
+		// itself is emptied when the page is left.
+		if (this.logPollHandle) L.Poll.remove(this.logPollHandle);
+		this.logPollHandle = L.Poll.add(function() {
 			// Only while visible and only when asked: a background tab polling a
 			// 2-core router every 3s is wasted work.
 			if (document.visibilityState === 'visible' &&
 			    self.logAutoRefreshChk && self.logAutoRefreshChk.checked) {
-				callScanLog().then(function(l) {
+				return callScanLog().then(function(l) {
 					if (!l || !self.logPane) return;
 					self.updateLog(self.logPane, l.merged || '');
 				});
 			}
-			window.setTimeout(tick, 3000);
-		};
-		tick();
+		}, 3);
 	},
 
 	handleSaveApply: null,
