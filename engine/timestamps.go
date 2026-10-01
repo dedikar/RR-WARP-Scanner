@@ -163,9 +163,12 @@ func enableTimestamps() func() {
 	os.Stderr = pipeW
 
 	return func() {
-		w.Flush()
+		// Close first, so the reader drains everything written up to the last
+		// moment into the writer, and only then stamp out the trailing line:
+		// flushing before the drain loses the final message of the run.
 		_ = pipeW.Close()
 		<-done
+		w.Flush()
 		r.Close()
 	}
 }

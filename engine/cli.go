@@ -133,8 +133,11 @@ func main() {
 
 	// Captured stderr (the LuCI backend redirects it) gets timestamps so the
 	// page can merge logs chronologically; a terminal keeps the plain TUI.
+	// os.Exit skips defers, so every exit path calls flush explicitly: without
+	// it the final error line died in the pipe and the log lost its verdict.
+	flush := func() {}
 	if !isTerminal(os.Stderr) {
-		flush := enableTimestamps()
+		flush = enableTimestamps()
 		defer flush()
 	}
 
@@ -147,6 +150,7 @@ func main() {
 
 	if len(os.Args) < 2 {
 		rootUsage(os.Stderr)
+		flush()
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -159,6 +163,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, errPal.fail(fmt.Sprintf("unknown command %q", os.Args[1])))
 		fmt.Fprintln(os.Stderr)
 		rootUsage(os.Stderr)
+		flush()
 		os.Exit(2)
 	}
 
@@ -181,6 +186,7 @@ func main() {
 
 	if err := cmd.run(ctx, opts); err != nil {
 		fmt.Fprintln(os.Stderr, errPal.fail(err.Error()))
+		flush()
 		os.Exit(1)
 	}
 }

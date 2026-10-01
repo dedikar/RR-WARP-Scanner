@@ -659,7 +659,7 @@ function scan_start(req) {
 	try { unlink(PIDFILE); } catch (e) {}
 	try { unlink(PROGRESS); } catch (e) {}
 	writefile(PROGRESS, 'starting\n');
-	writefile(SCAN_ID, '' + localtime());
+	writefile(SCAN_ID, stamp());
 
 	let argv = build_scan_args(s);
 	// The "scan" subcommand is mandatory - the engine dispatches on argv[1] and
