@@ -1,15 +1,4 @@
 #!/usr/bin/ucode
-// luci.rrws - ubus backend for RR WARP Scanner.
-//
-// The scanning engine is the Go binary at /usr/bin/rrws (fork of warpscout-tg).
-// This backend only marshals ubus calls into engine invocations and reads back
-// the engine's JSON report + progress file; it holds no scan logic of its own.
-//
-// Contract with the engine:
-//   rrws scan ... --json          -> JSON report on stdout
-//   rrws scan ... --progress FILE  -> one line, rewritten atomically:
-//                                    phase1:<done>:<total> | phase2:<done>:<total> | done
-//   account file                   -> /etc/rrws-account.json (same schema as upstream)
 
 // NOTE: no 'use strict' here. Under rpcd's module loader strict mode made the
 // method table below fail to resolve at call time - getSettings and version
@@ -31,10 +20,6 @@ const SETTINGS = '/etc/rrws-settings.json';
 const RESULT = '/tmp/rrws_result.json';        // fresh scan result
 const RESULT_SAVED = '/etc/rrws-last-result.json'; // survives reboot
 // State lives in a directory of its own. The name deliberately differs from the
-// binary's (/usr/bin/rrws) and from the account file's stem: an earlier layout
-// used /tmp/rrws as a directory while /tmp/rrws-account.json and /tmp/rrws.json
-// sat next to it, and ucode's fs.mkdir() silently failed to create it, so every
-// state write turned into a file at that path and the scan could not start.
 const RUNDIR = '/tmp/rrws-state';
 const PROGRESS = RUNDIR + '/progress';
 const PIDFILE = RUNDIR + '/pid';
@@ -58,12 +43,6 @@ function default_proto() {
 }
 
 // Mirrors poolsV4 in the engine (pools.go) - the subnets the UI lets you exclude.
-//
-// MUST be declared before any function that reads it. targets_from_excludes()
-// below iterates SUBNETS; with the list declared further down, that read saw an
-// uninitialised binding, the loop body never ran, and the function answered null
-// - which the caller reads as "no exclusions", so every exclusion was silently
-// ignored and the scan covered the whole pool.
 const SUBNETS = [
 	'8.6.112.0/24', '8.34.70.0/24', '8.34.146.0/24', '8.35.211.0/24',
 	'8.39.125.0/24', '8.39.204.0/24', '8.39.214.0/24', '8.47.69.0/24',
@@ -90,14 +69,6 @@ function json_escape(s) {
 }
 
 // Passing the surviving subnets as --target is how exclusions reach the engine;
-// returning null means "no exclusions, use the built-in pools".
-//
-// Built with string concatenation rather than join_list(): a call to another
-// user function from inside this one resolved to null here even with join_list
-// declared above it, and the failure was silent (the call answered null, so
-// every exclusion was ignored and the scan covered the whole pool). An earlier
-// inline copy of this same loop produced the right string, which is what
-// pointed at the cross-function call. Keep this self-contained.
 function targets_from_excludes(exclude) {
 	if (type(exclude) != 'array' || !length(exclude)) return null;
 	let out = '';
@@ -122,10 +93,6 @@ function targets_from_excludes(exclude) {
 // on two Cortex-A53 cores is still minutes, so the UI caps these too.
 const HOSTS_MAX = 4318;
 // Measured on the router (2026-09-29, full pool / 126 endpoints, 2-core
-// Cortex-A53): 8 jobs -> 68.6s, 32 -> 28.0s, 64 -> 21.9s, 128 -> 25.1s,
-// 192 -> 21.9s (load 3.4), 256 -> 25.2s. The plateau is at ~64: past it the
-// time stops improving while load climbs. 32 was a guess and cost half the
-// throughput; 64 is the measured optimum.
 const JOBS_MAX = 64;
 const TIMEOUT_MAX = 30;
 const SAMPLE_MAX = 256;
@@ -207,12 +174,6 @@ function ensure_rundir() {
 }
 
 // Diagnostics for a foreign router, where the package may be installed on
-// hardware it was not built for. Two failure shapes matter and they look the
-// same from outside ("nothing happens"):
-//   * the binary is absent (bad install),
-//   * the binary exists but cannot execute (wrong CPU architecture - the file
-//     is there, chmod +x succeeds, and the kernel still refuses to run it).
-// syslog() puts both in logread, which is the first place anyone looks.
 
 // Writes one line to the system log. The rpcd ucode environment has no syslog
 // binding here, so logger(1) is the portable route; failures are non-fatal.
@@ -251,10 +212,6 @@ function log_env(reason) {
 }
 
 // localtime() in this ucode build returns a struct that stringifies as a JSON
-// blob (sec/min/hour/mday/mon/year/wday/yday/isdst), which made every log line
-// hard to read. A plain "YYYY-MM-DD HH:MM:SS" comes from the shell instead, and
-// the result is cached per second: one action writes several lines that should
-// share a timestamp.
 let __ts_cache = null;
 let __ts_at = -1;
 function stamp() {
@@ -283,10 +240,6 @@ function read_json_file(p) {
 // ---------------------------------------------------------------- account ---
 
 // Declared BEFORE account_status on purpose: this ucode build does not resolve a
-// forward reference to a function declared later in the file. account_status
-// calling a register_running defined below it produced
-// "left-hand side is not a function" from the ubus call, while the same function
-// worked when tested in isolation. Keep callee-above-caller ordering here.
 function register_running() {
 	if (!file_exists(REG_MARK)) return false;
 	// Deliberately not pgrep via popen: a popen whose child exits non-zero made
@@ -305,11 +258,8 @@ function account_status() {
 	if (!a || !a.id)
 		return { registered: false, registering: register_running() };
 	let id = a.id;
-	// The engine writes "ipv4", but an account minted by the older build carries
-	// "address". Reading only the old name left this empty for every account
-	// registered since, and conf_base() masked it by falling back to uci and then
-	// to a hard-coded 172.16.0.2/32 - so .conf happened to be right while the
-	// value the UI displayed was wrong.
+	// The engine writes "ipv4"; an account from the older build carries "address" -
+	// read both, or the field shows up empty.
 	let addr = a.ipv4 != null ? a.ipv4 : a.address;
 	let priv = a.private_key;
 	let peer = a.peer_public_key;
@@ -415,12 +365,6 @@ function uci_get(sel) {
 }
 
 // Values the UI needs to build a client .conf for a found endpoint. The engine's
-// account is the source of truth so a pasted config pairs with THIS account.
-//
-// The fallback chain is kept (uci, then the well-known Cloudflare address) but it
-// is no longer load-bearing: it used to cover for account_status() reading a
-// field name the engine no longer writes, which meant a .conf carried the right
-// address by luck and a wrong one the moment Cloudflare handed out something else.
 function conf_base() {
 	const a = account_status();
 	const I1_DEFAULT = '<r 2><b 0x858000010001000000000669636c6f756403636f6d0000010001c00c000100010000105a00044d583737>';
@@ -443,10 +387,6 @@ function conf_base() {
 // --------------------------------------------------------------- settings ---
 
 // Widely-seen Cloudflare WARP edge codes, used only to seed the node pick-list.
-// Cloudflare assigns the colo per endpoint at connect time, so this is a
-// convenience list, not a contract: an endpoint on a node absent here still
-// works, and a code here that this network never reaches simply never matches.
-// DME (Moscow) leads because it is the one routinely filtered from RU ISPs.
 const KNOWN_NODES = [
 	'DME', 'LED', 'KJA', 'OVB',
 	'ARN', 'CPH', 'HEL', 'OSL', 'AMS', 'FRA', 'CDG', 'LHR', 'MAD', 'MXP',
@@ -472,7 +412,7 @@ function known_nodes() {
 		}
 	}
 	for (let i = 0; i < length(KNOWN_NODES); i++) seen[KNOWN_NODES[i]] = true;
-	// Include anything already configured, so a saved value never disappears
+	// Include anything already configured, so a saved value never disappears.
 	// from the list that is supposed to represent it.
 	const s = read_json_file(SETTINGS) ?? {};
 	const lists = [s.exclude_nodes, s.include_nodes];
@@ -487,7 +427,7 @@ function known_nodes() {
 	let out = [];
 	for (let i = 0; i < length(KNOWN_NODES); i++)
 		if (seen[KNOWN_NODES[i]]) { push(out, KNOWN_NODES[i]); delete seen[KNOWN_NODES[i]]; }
-	// remaining codes, alphabetically
+	// the remaining codes, alphabetically
 	let rest = keys(seen);
 	// simple insertion sort: this build has no global sort() for association keys
 	for (let i = 1; i < length(rest); i++) {
@@ -513,10 +453,6 @@ function get_settings() {
 	}
 	out.subnets = SUBNETS;
 	// Node/country pick-list for the UI. The engine learns the colo (IATA) from
-	// Cloudflare per endpoint and ships no static list, so candidates come from
-	// what this router has actually reached, unioned with the widely-seen WARP
-	// edge codes. The UI renders these as a checkbox dropdown; a code that never
-	// appears simply never matches.
 	out.nodes = known_nodes();
 	return out;
 }
@@ -637,7 +573,7 @@ function build_scan_args(s) {
 	push(args, '--json');
 	push(args, '--progress', PROGRESS);
 
-	// protocol and scale
+	// Passed as-is: the engine owns the protocol choice and the scale.
 	push(args, '-p', s.proto);
 	if (s.tun_ping) push(args, '-P');
 	// -tg-only implies -tg in the engine itself, so passing both is harmless and
@@ -648,11 +584,7 @@ function build_scan_args(s) {
 	// sending the default back would be noise in the log.
 	if (s.tun_ping && to_int(s.tun_ping_count, 10) != 10)
 		push(args, '--tun-ping-count', '' + to_int(s.tun_ping_count, 10));
-	// The field is labelled "Хостов на подсеть" and the engine's -n is addresses
-	// PER SUBNET, so the value passes straight through. An earlier version
-	// divided it by the subnet count, treating it as a total: entering 100 then
-	// scanned 7 per subnet, and the found-endpoint count barely moved no matter
-	// what the user typed.
+	// The engine's -n counts addresses PER SUBNET, so the value passes as-is.
 	if (s.full) push(args, '-f');
 	else push(args, '-n', '' + max(1, to_int(s.sample, DEFAULTS.sample)));
 	push(args, '-t', '' + s.timeout);
@@ -737,23 +669,11 @@ function scan_start(req) {
 	cmd += ' > ' + RESULT + ' 2> ' + LOG;
 
 	// setsid + immediate return: a LuCI rpc request dies at ~20s, and a scan is
-	// minutes. The UI polls scanStatus instead.
-	//
-	// The pid comes from the shell's own $!, not from pgrep: inside rpcd's popen
-	// context pgrep returned nothing, so the pidfile stayed empty and scanStatus
-	// declared the run finished the moment it started. setsid execs the shell
-	// directly, so $! IS the engine process and /proc/<pid> tracks it.
 	const runner = 'setsid sh -c ' + shellquote('echo $$ > ' + PIDFILE + '; exec ' + cmd) +
 		' < /dev/null > /dev/null 2>&1 &';
 	command(runner);
 
 	// Wait for the pidfile to appear (bounded), then report whether the run is
-	// really alive. The earlier version spun with no sleep, which never gave
-	// setsid a chance and produced a bogus "pidfile missing" every time; the
-	// fix is a real bounded wait, not no wait at all. Without this, scanStart
-	// returns while the pidfile is still absent, the page's first poll reads
-	// running=false, and the UI concludes the scan already finished - leaving
-	// the previous result on screen until the user reloads.
 	let waited = 0;
 	while (waited < 40 && !file_exists(PIDFILE)) {
 		command('sleep 0.05');
@@ -832,13 +752,6 @@ function scan_status() {
 	if (!running && phase != 'done' && phase != 'idle') phase = (phase == 'starting' ? 'idle' : 'done');
 
 	// Persist the finished run here, on the poll that first sees it complete.
-	//
-	// This used to happen only at the start of the NEXT scan, where the previous
-	// result was copied to /etc before being overwritten - so /etc/rrws-last-result
-	// existed only for someone who had run a scan twice. Measured on the router:
-	// one scan, then a reboot, and 603 endpoints were gone along with /tmp, while
-	// keep.d meanwhile listed the file as sysupgrade-safe. Saving on completion
-	// makes the file mean what keep.d already claimed it meant.
 	if (phase == 'done' && !running) {
 		const cur = read_file(RESULT);
 		if (cur != null && length(cur)) {
@@ -928,19 +841,6 @@ function scan_result() {
 }
 
 // Both logs carry the same "YYYY-MM-DD HH:MM:SS" prefix: the engine writes it
-// when its stderr is redirected (engine/timestamps.go), and the backend adds it
-// in stamp(). They are merged into one chronological stream so the page shows a
-// single log instead of two panes that are hard to read side by side.
-//
-// Lines without a timestamp - a stray panic, or output from an older engine -
-// keep their place instead of being dropped.
-//
-// Takes any number of { text, tag } sources so registration output can join the
-// same stream. It used to take exactly two positional strings, and the
-// registration log was left out entirely: registration runs a different engine
-// subcommand, writes to its own file, and takes up to three minutes, during
-// which the page showed a bare "Регистрация... (46 с)" with no way to see why it
-// was slow or where it failed.
 function merge_logs(sources) {
 	const rows = [];
 
@@ -994,8 +894,7 @@ function scan_log() {
 	const engine = read_file(LOG) ?? '';
 	const rpc = read_file(RPC_LOG) ?? '';
 	// Registration output joins the same stream: it is the same engine talking,
-	// just a different subcommand, and it has to be readable in one place with
-	// everything else.
+	// a different subcommand of the same engine, in the same format.
 	const reg = read_file(REG_LOG) ?? '';
 	return { merged: merge_logs([
 		{ text: engine, tag: 'engine' },

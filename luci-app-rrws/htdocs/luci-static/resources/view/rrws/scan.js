@@ -7,10 +7,6 @@
 'require dom';
 
 // RR WARP Scanner - LuCI front end for the /usr/bin/rrws engine.
-//
-// The page no longer parses fixed-width result lines: the engine emits JSON and
-// this view renders it directly, which is what makes the Telegram column
-// possible (the old 7-field parser could not carry an 8th field).
 
 var XHR_RELOAD_GUARD_KEY = 'rrws:xhr-reload-at';
 var XHR_RELOAD_GUARD_WINDOW_MS = 30000;
@@ -57,16 +53,6 @@ var callConfBase      = declare({ object: 'luci.rrws', method: 'confBase', param
 var callVersion       = declare({ object: 'luci.rrws', method: 'version', params: {}, reject: false });
 var callGetSettings   = declare({ object: 'luci.rrws', method: 'getSettings', params: {}, reject: false });
 // Named saveOpts, not saveSettings: LuCI already owns a `saveSettings` on the rpc
-// surface, and a backend method sharing that name never saw this page's calls.
-//
-// Called by posting JSON-RPC straight to /ubus with the page's session id rather
-// than through L.rpc.call. On this build the framework wrapper answered 200 with
-// an empty body and never reached rpcd, so every save looked successful and
-// changed nothing; the direct POST is verified to work against the router.
-// Monotonic request id. Date.now() was used before, and three pollers run at
-// once (status every 2s, both logs every 3s), so two requests could leave in the
-// same millisecond carrying the same id - JSON-RPC cannot tell such replies
-// apart, and a caller could be handed the other one's answer.
 var __rpcSeq = 0;
 
 function ubusCall(object, method, params) {
@@ -109,30 +95,12 @@ var TG_TOTAL = 5;
 // ------------------------------------------------------------- theming ---
 
 // Panel styling for the whole page, injected once.
-//
-// The borders were hardcoded (#555 on #1a1a1a) and only looked right in the
-// dark theme; on a light background the panels disappeared. These rules use the
-// theme's own CSS variables with fallbacks, so the same markup works either way.
-// Applied by class rather than inline styles so every section stays consistent
-// and one edit changes all of them.
-//
-// LuCI themes do not style .cbi-section with a visible border, which is why the
-// account and scan blocks looked like bare text while the filter blocks had
-// frames - the frames were mine, added ad hoc. Now every block uses .rrws-panel.
 var pageCssInjected = false;
 function injectPageCss() {
 	if (pageCssInjected) return;
 	pageCssInjected = true;
 	var css = [
 		// Panels sit one theme step above the page background and carry a frame.
-		//
-		// The frame uses the theme's own border token, NOT a white overlay. A
-		// near-opaque white frame (rgba(255,255,255,.85)) looked "foreign" against
-		// this theme: measured on the router, the theme is nearly monochrome -
-		// background high/medium/low are rgb(20,24,31) / (29,34,42) / (37,41,49),
-		// steps of ~1.1:1 - and anything brighter than that band reads as a
-		// different material rather than as part of the page. The sidebar looks
-		// right for the same reason: it is built from these steps alone.
 		'html .cbi-section.rrws-panel, html .rrws-panel {',
 		'  border: 1px solid var(--border-color-medium, rgba(128,128,128,.35));',
 		'  border-radius: 6px;',
@@ -190,20 +158,6 @@ function injectPageCss() {
 		'.rrws-disclosure[open] > summary { margin-bottom: 8px; }',
 		'.rrws-disclosure[open] > summary { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }',
 		// Result cards.
-		//
-		// These were an inline #2228 on the panel's own dark grey: two
-		// near-identical greys stacked, so with hundreds of results the list read
-		// as one undifferentiated slab. The first fix overcorrected with a white
-		// overlay (rgba(255,255,255,.14)) that reached 1.55:1 - readable, but it
-		// put the cards outside the theme's own tonal range and they looked like a
-		// foreign material next to the sidebar.
-		//
-		// The theme's steps are close together by design (high/medium/low are
-		// rgb(20,24,31) / (29,34,42) / (37,41,49), roughly 1.1:1 apart), so a card
-		// cannot be separated by fill alone in either direction. It leans on the
-		// 4px left stripe and a themed border for the edges, and takes
-		// --background-color-low - the one step above its panel - so it belongs to
-		// the palette while still being a distinguishable surface.
 		'.rrws-card {',
 		'  border-left: 4px solid var(--border-color-high, #444);',
 		'  border-top: 1px solid var(--border-color-medium, rgba(128,128,128,.35));',
@@ -217,11 +171,6 @@ function injectPageCss() {
 		'.rrws-card-best { border-left-color: #16a34a; }',
 		'.rrws-card-torn { border-left-color: #b91c1c; opacity: .65; }',
 		// The metadata line follows the theme so it stays legible on whatever
-		// surface the card got, instead of the fixed #aaa that assumed dark.
-		//
-		// 13px rather than 12: on a router page read at arm's length the endpoint
-		// line is small enough already, and this is the line that carries the
-		// facts being compared between rows (ping, tunnel, Telegram).
 		'.rrws-card-meta { font-size: 13px; margin-top: 4px; color: var(--text-color-medium, #666); }',
 		// The actions sit on the same line as the endpoint, pinned to the right edge
 		// of the card. `flex: 0 0 auto` keeps them at their natural width so the
@@ -284,15 +233,6 @@ var versionText = '?';
 var dropdowns = {};
 
 // A collapsible checkbox list: a <details> whose summary shows the current
-// picks, containing one checkbox per choice.
-//
-// ui.Dropdown is deliberately NOT used here. On this LuCI build (24.10 /
-// RouteRich, ui.js as shipped) it exposes no getValue()/getSelected(), stores
-// its selection in a `selected` attribute that only its own trusted-pointer
-// handler writes, and fires cbi-dropdown-change in a way that is awkward to
-// drive programmatically. Two rounds of trying to read it back produced a UI
-// that looked right while saving nothing. Plain checkboxes have one source of
-// truth - el.checked - which cannot drift from what the user sees.
 function mkCheckList(selected, choices, placeholder) {
 	var keys = Object.keys(choices || {});
 	if (!keys.length) return null;
@@ -445,16 +385,6 @@ function pingText(v) {
 }
 
 // Colour a latency value by how usable it is on this network.
-//
-// The thresholds come from the measurements in the README: on this router the
-// good endpoints sit around 40-70 ms in-tunnel and Telegram round-trips land in
-// the 400-600 ms range, which is normal for MTProto over WARP and not a fault.
-// So the bands are set for "is this worth keeping", not for absolute quality:
-// green is what the top of the list looks like, yellow is workable, red is the
-// tail. They are deliberately generous - colouring half the list red would say
-// nothing.
-//
-// Kept as a single place so the card and any future summary agree.
 var PING_GOOD_MS = 80;
 var PING_OK_MS = 150;
 
@@ -484,11 +414,6 @@ function tgColor(v) {
 }
 
 // Build "подпись значение" with only the value coloured.
-//
-// The colour belongs on the number, not on the word: colouring the whole pair
-// turned the labels themselves green and yellow, so "пинг" and "в туннеле" read
-// as the measured values and the row looked like it was highlighting the wrong
-// thing.
 function metric(label, value, color) {
 	var frag = document.createDocumentFragment();
 	frag.appendChild(document.createTextNode(label + ' '));
@@ -563,10 +488,6 @@ return view.extend({
 		wrap.appendChild(headerEl);
 
 		// --- account block and the vendor banner, side by side -------------
-		// The banner is a single clickable tile (logo + "Информация") pointing at
-		// the vendor page. It is shown ONLY when deviceCheck says the hardware is
-		// not a RouteRich unit (no 24:0F:5E OUI), so on a real RouteRich router
-		// this space stays empty.
 		var headerRow = E('div', { style: 'display:flex;align-items:stretch;gap:14px;margin-bottom:14px;flex-wrap:wrap' });
 		wrap.appendChild(headerRow);
 
@@ -651,10 +572,6 @@ return view.extend({
 
 		if (acct.registered) {
 			// Each cell is appended explicitly: E('tr', {}, td1, td2) silently
-			// drops td2 (single-child rule), which is why the ID/Address/Key
-			// values were missing from an otherwise correct-looking table.
-			// `copy` adds a copy button beside the value; the ID and the private
-			// key are what people paste into a client, so both get one.
 			var cell = function(label, value, copy) {
 				var tr = E('tr', {});
 				tr.appendChild(E('td', { style: 'width:140px;color:#888;vertical-align:top' }, label));
@@ -833,22 +750,12 @@ return view.extend({
 
 		var f = function(label, node) {
 			// LuCI's E() honours only ONE child argument; any extra arguments are
-			// dropped silently. That is how the first version of this page ended
-			// up rendering bare empty labels with no input beside them.
-			//
-			// The label width is a class, not an inline style: a fixed 230px label
-			// on a 390px screen left the input a sliver and opened a wide gap
-			// between the two, so the media query narrows this column on a phone.
 			var row = E('div', { style: 'margin-bottom:8px' });
 			row.appendChild(E('label', { 'class': 'rrws-field-label' }, label));
 			if (node) row.appendChild(node);
 			return row;
 		};
 		// A numeric field with REAL validation. min/max alone are only a browser
-		// hint: they do not stop a typed value from being sent, and the backend
-		// clamps silently, so the user would never learn their input was reduced.
-		// Each field therefore gets an inline error and a visible range, and
-		// startScan refuses to run while any is invalid.
 		var invalidFields = [];
 		var num = function(name, val, min, max, w, hint) {
 			var row = E('div', { style: 'display:inline-block;vertical-align:top' });
@@ -969,10 +876,6 @@ return view.extend({
 		syncTpUi();
 
 		// --- exclusions: checkbox dropdowns, not free-text IATA entry -------
-		// Each pick-list is a native LuCI multi-select. The engine wants the three
-		// filters separate: --target (subnets), --exclude-node and --node are
-		// independent. Choosing from a list also removes the silent no-match of a
-		// mistyped code, which the old free-text fields allowed.
 		var mkChoices = function(list) {
 			var c = {};
 			for (var i = 0; i < list.length; i++) c[list[i]] = list[i];
@@ -1048,10 +951,6 @@ return view.extend({
 		sec.appendChild(adv);
 
 		// --- speed test section -------------------------------------------
-		// The switch and the endpoint count belong together: the phase downloads
-		// through each endpoint one at a time, so how many get measured is what
-		// tells the user how long the run will take. The checkbox used to live in
-		// "Дополнительно", far from the field it controls.
 		var spSection = E('div', { 'class': 'cbi-section rrws-panel' });
 		spSection.appendChild(E('h3', {}, 'Тест скорости'));
 		spSection.appendChild(E('p', { 'class': 'text-muted', style: 'margin:2px 0 8px 0' },
@@ -1135,10 +1034,6 @@ return view.extend({
 		this.renderResults(res0);
 
 		// Persist on ANY field change, not only on the exclusion lists. Without
-		// this, edits to hosts/timeout/jobs/speed_top sat in the DOM and were
-		// only written when a scan was started - so reloading the page silently
-		// discarded them. 'change' (not 'input') so a half-typed number is not
-		// saved on every keystroke; the numeric fields already validate on input.
 		sec.addEventListener('change', function(ev) {
 			var t = ev.target;
 			if (!t || !t.name) return;                    // dropdown rows have no name
@@ -1226,11 +1121,6 @@ return view.extend({
 	pollScan: function() {
 		var self = this;
 		// A scan that has just been launched has not written its pidfile yet, so
-		// the first one or two polls legitimately see running=false. Treating that
-		// as "finished" ended the loop seconds after start: the page then sat on
-		// the PREVIOUS result until the user reloaded, which is the minute-long
-		// stall this guard exists to prevent. Only accept "not running" once we
-		// have seen the run actually alive, or after the grace period.
 		var sawRunning = false;
 		var startedAt = Date.now();
 		var GRACE_MS = 15000;
@@ -1364,18 +1254,6 @@ return view.extend({
 			head.appendChild(dlBtn);
 		}
 		// Sort keys offered as buttons under the summary line.
-		//
-		// Each has a natural default direction, because "ping" is almost always
-		// wanted ascending (fastest first) and "node" alphabetically, while a
-		// separate direction toggle would be one more control for the common case
-		// to get wrong. Clicking the active key flips the direction anyway.
-		//
-		// `bestOf` decides which row carries the ЛУЧШИЙ badge FOR THIS KEY: the
-		// badge has to mean "the best row by the column I just sorted by", or it
-		// contradicts the order on screen. It used to be a fixed rule (first
-		// stable Telegram-capable row), which meant sorting by speed still badged
-		// whatever row happened to satisfy the Telegram rule first - the one thing
-		// the ordering said was irrelevant.
 		var SORTS = [
 			{ id: 'default', label: 'По умолчанию', defDir: 'asc',
 			  title: 'Сначала с рабочим Telegram, затем стабильные, затем меньший пинг в туннеле',
@@ -1436,13 +1314,6 @@ return view.extend({
 		list.forEach(function(r) { if (r.speed_measured) measuredCount++; });
 
 		// Compare by the chosen key. Endpoints missing a value always sink to the
-		// bottom regardless of direction: an endpoint without a Telegram probe has
-		// nothing to compare, and floating it to the top on a descending sort would
-		// present "no data" as the best result.
-		// Each comparator takes the direction and applies it to the VALUE comparison
-		// only. Rules about missing data are applied outside the direction, because
-		// "no measurement" is not a value that can be larger or smaller - reversing
-		// it would present untested endpoints as the best ones.
 		var dir = function(c, d) { return d > 0 ? c : -c; };
 
 		// Compare two possibly-absent numbers so that absence always sorts last,
@@ -1459,23 +1330,6 @@ return view.extend({
 		var comparators = {
 			default: function(a, b, d) {
 				// The order that answers "which of these should I actually use",
-				// decided by the fields in the order they matter:
-				//
-				//   1. Telegram reaches all five DCs  - without it some accounts
-				//      simply will not connect, whatever else the row scores;
-				//   2. lowest Telegram round-trip     - among equals on point 1 this
-				//      is the one the user feels, and it is what the numbers differ
-				//      on most: 398 ms against 2783 ms on the same result set;
-				//   3. stable (not torn, no loss);
-				//   4. lowest ping, preferring the in-tunnel figure.
-				//
-				// Point 2 is what used to be missing: the engine ranks within the
-				// Telegram group only when -tg-only is set, so with the filter off
-				// it sorted that group by ping alone and put a 2783 ms endpoint
-				// above a 398 ms one.
-				//
-				// No direction to flip: this is "what the tool recommends", not a
-				// column to sort ascending.
 				if (!!b.tg_ok !== !!a.tg_ok) return b.tg_ok ? 1 : -1;
 				if (a.tg_ok && b.tg_ok) {
 					var ag = a.tg_rtt_ms || 9999;
@@ -1604,10 +1458,6 @@ return view.extend({
 			var sorted;
 			if ((sortId === 'default' || sortId === 'speed') && measuredCount) {
 				// The run measured speed, so the measured endpoints lead the list -
-				// the checkbox promised them, and scattering them across the tg
-				// order reads as broken. Fastest first; everything else stays in
-				// the default order below. The speed key flips the block; other
-				// keys sort the whole list and ignore the blocks.
 				var dirMul = (sortId === 'speed' ? sortDir : -1);
 				var head = list.filter(function(r) { return r.speed_measured; })
 					.sort(function(a, b) { return dirMul * ((a.speed_mbps || 0) - (b.speed_mbps || 0)); });
@@ -1623,14 +1473,6 @@ return view.extend({
 			}
 
 			// "ЛУЧШИЙ" follows the sort: it marks the first row in the order shown
-			// that actually has a value in the sorted column - which, since the
-			// list is already sorted, IS the best row by that column. Sorting by
-			// node has no best row and shows no badge.
-			//
-			// Searching the displayed order rather than the ascending one keeps
-			// this correct for both directions without any index arithmetic: the
-			// first measured row is the fastest under a descending sort and the
-			// slowest under an ascending one, and each is what the order claims.
 			var bestIdx = -1;
 			for (var si = 0; si < SORTS.length; si++) {
 				if (SORTS[si].id !== sortId) continue;
@@ -1647,12 +1489,6 @@ return view.extend({
 			var row = E('div', { 'class': cls });
 
 			// One row per result: identity on the left, actions pinned right.
-			//
-			// This used to stack three blocks - endpoint line, metadata line,
-			// buttons - which spent a full row on the buttons alone. They now sit
-			// on the same line as the data they act on, so a screen shows roughly a
-			// third more endpoints. `min-width:0` on the text column is what lets it
-			// shrink instead of pushing the buttons off the card.
 			row.style.display = 'flex';
 			row.style.alignItems = 'center';
 			row.style.gap = '12px';
@@ -1751,11 +1587,6 @@ return view.extend({
 		det.appendChild(E('summary', {}, 'Логи'));
 
 		// One merged log, in chronological order, like a chat: the backend
-		// interleaves engine and rpcd lines by their timestamps, so the page
-		// renders a single stream. Two side-by-side panes were hard to follow -
-		// the reader had to match up what happened when across two scrollbars.
-		// Each line is tagged with its source instead, which costs three
-		// characters and keeps the order intact.
 		var logWrap = E('div', { style: 'margin-top:8px' });
 		var pre = E('pre', {
 			style: 'height:320px;overflow:auto;font-size:11px;white-space:pre-wrap;padding:8px;margin:0;border-radius:3px'
@@ -1805,10 +1636,6 @@ return view.extend({
 	},
 
 	// The merged log is rebuilt server-side in timestamp order, so a line can
-	// appear between two existing ones - the stream is not append-only any more
-	// and diffing the tail would show it out of order. Replacing the text is
-	// therefore the simple correct thing, and the scroll position is preserved
-	// by restoring it around the swap.
 	updateLog: function(el, text) {
 		if (text === this.logSeen) return;
 		this.logSeen = text;

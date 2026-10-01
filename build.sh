@@ -23,11 +23,6 @@ GO_BIN="rrws"
 GOARCH_TARGET="arm64"
 
 # Go is not always on PATH in a bare WSL shell, and WSL interop puts the Windows
-# toolchain (a Windows go.exe under /mnt/c) ahead of it.
-# A Windows go.exe CAN cross-compile linux/arm64 and the result links, but the
-# binaries trap with SIGILL ("Illegal instruction", rc 132) on the router's
-# Cortex-A53 - measured on 2026-09-29, which cost an afternoon. So the Linux
-# toolchain is forced to the FRONT of PATH, and its identity is asserted below.
 if [ -x /usr/local/go/bin/go ]; then
 	PATH="/usr/local/go/bin:$PATH"
 	export PATH
