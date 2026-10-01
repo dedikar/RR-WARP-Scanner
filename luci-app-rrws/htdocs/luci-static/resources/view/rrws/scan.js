@@ -1387,13 +1387,17 @@ return view.extend({
 				  return -1;
 			  } },
 			{ id: 'speed', label: 'Скорость', defDir: 'desc',
-			  title: 'По замеренной скорости, от большей к меньшей. Замер идёт только по эндпоинтам из теста скорости, поэтому неизмеренные оказываются внизу',
-			  // Fastest measured; only measured rows can hold it, since a row
-			  // without a figure has nothing to be best at.
+			  title: 'Измеренные при наличии замера стоят наверху от быстрых к медленным; повторное нажатие переворачивает блок',
+			  // Fastest measured, whatever direction the block is flipped to:
+			  // the best speed is the fast one, not the first one shown.
 			  bestOf: function(rows) {
+				  var bi = -1, top = -1;
 				  for (var i = 0; i < rows.length; i++)
-					  if (rows[i].speed_measured) return i;
-				  return -1;
+					  if (rows[i].speed_measured && (rows[i].speed_mbps || 0) > top) {
+						  top = rows[i].speed_mbps || 0;
+						  bi = i;
+					  }
+				  return bi;
 			  } },
 			{ id: 'node', label: 'Узел', defDir: 'asc',
 			  title: 'По коду узла Cloudflare',
@@ -1563,8 +1567,8 @@ return view.extend({
 			var note = E('span', { 'class': 'rrws-sortbar-label' },
 				'замерено ' + measuredCount + ' из ' + list.length);
 			note.title = 'Замер скорости идёт только по эндпоинтам, отобранным движком ' +
-				'(лучший на узел и на подсеть), поэтому сортировка по скорости ' +
-				'упорядочивает только их, а остальные остаются внизу';
+				'(лучший на узел и на подсеть), поэтому они собраны вверху списка, ' +
+				'а остальные остаются ниже';
 			sortBar.appendChild(note);
 		}
 		content.appendChild(sortBar);
@@ -1597,14 +1601,26 @@ return view.extend({
 		var renderCards = function() {
 			while (cardsBox.firstChild) cardsBox.removeChild(cardsBox.firstChild);
 
-			var sorted = list.slice().sort(function(a, b) {
-				// Direction is applied by each comparator, not by negating its
-				// result here. Negating the whole comparison also flipped the
-				// "unmeasured sinks to the bottom" rule, which is what put 515
-				// endpoints without a speed figure at the TOP of a descending sort.
-				var c = comparators[sortId](a, b, sortDir);
-				return c;
-			});
+			var sorted;
+			if ((sortId === 'default' || sortId === 'speed') && measuredCount) {
+				// The run measured speed, so the measured endpoints lead the list -
+				// the checkbox promised them, and scattering them across the tg
+				// order reads as broken. Fastest first; everything else stays in
+				// the default order below. The speed key flips the block; other
+				// keys sort the whole list and ignore the blocks.
+				var dirMul = (sortId === 'speed' ? sortDir : -1);
+				var head = list.filter(function(r) { return r.speed_measured; })
+					.sort(function(a, b) { return dirMul * ((a.speed_mbps || 0) - (b.speed_mbps || 0)); });
+				sorted = head.concat(list.filter(function(r) { return !r.speed_measured; }));
+			} else {
+				sorted = list.slice().sort(function(a, b) {
+					// Direction is applied by each comparator, not by negating its
+					// result here. Negating the whole comparison also flipped the
+					// "unmeasured sinks to the bottom" rule, which is what put 515
+					// endpoints without a speed figure at the TOP of a descending sort.
+					return comparators[sortId](a, b, sortDir);
+				});
+			}
 
 			// "ЛУЧШИЙ" follows the sort: it marks the first row in the order shown
 			// that actually has a value in the sorted column - which, since the
