@@ -19,6 +19,8 @@
 import { popen, readfile, writefile, stat, unlink, mkdir } from 'fs';
 
 const BIN = '/usr/bin/rrws';
+// The registration ladder: standard, then zeroblock, then opera-proxy.
+const LADDER = '/usr/bin/rrws-register.sh';
 // Recorded so a failure report can state what the package was built for;
 // the binary is aarch64, while the package itself is marked 'all' because
 // it is mostly scripts - which is exactly how it lands on wrong hardware.
@@ -1027,13 +1029,22 @@ function register_start(renew) {
 		return { error: 'registration already running' };
 	ensure_rundir();
 	let extra = renew ? ' --fresh' : '';
-	const cmd = BIN + ' register -a ' + shellquote(ACCOUNT) + extra + ' > ' + REG_LOG + ' 2>&1';
+	// The ladder script owns the attempt order (standard, then zeroblock, then
+	// opera-proxy); its output and the engine output land in REG_LOG.
+	const cmd = LADDER + extra + ' > ' + REG_LOG + ' 2>&1';
 	// Same $! pid capture as scan_start: register_running() reads this pidfile to
 	// tell a live registration from a stale marker.
 	try { unlink(PIDFILE); } catch (e) {}
 	command('setsid sh -c ' + shellquote('echo $$ > ' + PIDFILE + '; exec ' + cmd) +
 		' < /dev/null > /dev/null 2>&1 &');
 	writefile(REG_MARK, '1');
+	// Bounded wait for the pidfile (as in scan_start): the first page poll must
+	// not read registering=false while setsid is still spawning.
+	let waited = 0;
+	while (waited < 40 && !file_exists(PIDFILE)) {
+		command('sleep 0.05');
+		waited++;
+	}
 	rpclog('register', renew ? 'renew' : 'new');
 	return { started: true };
 }

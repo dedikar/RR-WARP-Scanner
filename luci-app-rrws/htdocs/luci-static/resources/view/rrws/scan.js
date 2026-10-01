@@ -778,7 +778,10 @@ return view.extend({
 			if (self.regPollHandle) { L.Poll.remove(self.regPollHandle); self.regPollHandle = null; }
 		};
 		var tick = function() {
-			if (++tries > 90) {   // ~3 minutes
+			// The backend ladder is bounded (~5.5 min worst case); 8 minutes is
+			// only a last-resort cap. The real verdict arrives through
+			// accountStatus: registered=true, or registering=false on failure.
+			if (++tries > 240) {
 				// A timeout is not a cause: pull the log and show what the engine
 				// actually said last, instead of hiding the reason behind a
 				// generic message.
@@ -817,7 +820,7 @@ return view.extend({
 						btn.textContent = label;
 						return;
 					}
-					if (self.regStatusEl) self.regStatusEl.textContent = 'Регистрация... (' + tries + ' с)';
+					if (self.regStatusEl) self.regStatusEl.textContent = 'Регистрация... (' + (tries * 2) + ' с)';
 				});
 			}, function() { /* a failed round is retried on the next one */ });
 		};

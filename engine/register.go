@@ -15,12 +15,12 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/curve25519"
 
 	"github.com/amnezia-vpn/amneziawg-go/tun/netstack"
-	"github.com/charmbracelet/bubbles/progress"
 )
 
 const (
@@ -33,7 +33,7 @@ const (
 	defaultRelay    = "https://edge-client-api.vercel.app"
 	apiReachTimeout = 3 * time.Second
 	registerTimeout = 15 * time.Second
-	relayTimeout    = 45 * time.Second
+	relayTimeout    = 15 * time.Second
 	regTunnelMSS    = 1200
 )
 
@@ -451,27 +451,61 @@ func obtainAccount(ctx context.Context, o options, ips []netip.Addr, timeout tim
 
 	sampled := sampleAddrs(ips, tunnelDiscoverySample)
 	origI1, origLabel := awgI1, genI1Label
-	var lastErr error
-	for _, p := range []protoRun{{kindAWG, protoAWG}, {kindWG, protoWG}} {
-		for _, c := range regI1Candidates(p, o, origI1, origLabel) {
-			// newTunnel bakes the globals into the UAPI config, so set them first.
-			awgI1, genI1Label = c.chain, c.label
-			label := p.name
-			if p.isAWG() && !o.i1Explicit {
-				label += fmt.Sprintf(" (%s)", i1NoteFor(c.chain, c.label))
-			}
-			onProbe := discoveryProgress(label, len(sampled), usePlainOutput(o))
-			a, err := registerViaTunnel(ctx, p, sampled, timeout, onProbe, existing)
-			if onProbe != nil {
-				fmt.Fprintln(os.Stderr)
-			}
-			if err == nil {
-				reportRegI1(origI1)
-				return a, nil
-			}
-			fmt.Fprintln(os.Stderr, errPal.fail(fmt.Sprintf("  %s: %v", label, err)))
-			lastErr = err
+	awgRun := protoRun{kindAWG, protoAWG}
+
+	// The I1 masks are independent, so they all probe at once: run one after
+	// another, their budgets add up to minutes of guaranteed failure on a
+	// blocked network. One shared budget covers the whole sweep, the first
+	// account wins, and the losers are cancelled. On a clean network two
+	// candidates can both mint an account - the duplicate is discarded, it
+	// costs one wasted registration at worst.
+	tunnelCtx, cancel := context.WithTimeout(ctx, tunnelDiscoveryBudget)
+	defer cancel()
+
+	cands := regI1Candidates(awgRun, o, origI1, origLabel)
+	type candResult struct {
+		cand  i1Candidate
+		label string
+		a     account
+		err   error
+	}
+	resCh := make(chan candResult, len(cands))
+	for _, c := range cands {
+		c := c
+		label := awgRun.name
+		if !o.i1Explicit {
+			label += fmt.Sprintf(" (%s)", i1NoteFor(c.chain, c.label))
 		}
+		fmt.Fprintf(os.Stderr, "  %s: probing %d endpoints\n", label, len(sampled))
+		go func() {
+			a, err := registerViaTunnel(tunnelCtx, awgRun, sampled, timeout, c, existing)
+			resCh <- candResult{cand: c, label: label, a: a, err: err}
+		}()
+	}
+
+	var lastErr error
+	var win candResult
+	won := false
+	for range cands {
+		r := <-resCh
+		if r.err != nil {
+			fmt.Fprintln(os.Stderr, errPal.fail(fmt.Sprintf("  %s: %v", r.label, r.err)))
+			lastErr = r.err
+			continue
+		}
+		if !won {
+			// Stop the losers now, but wait for every result anyway: only then
+			// is nobody left inside buildTunnel to clobber the globals below.
+			won = true
+			win = r
+			cancel()
+		}
+	}
+	if won {
+		// The winning mask stays for the rest of the run, like it always did.
+		awgI1, genI1Label = win.cand.chain, win.cand.label
+		reportRegI1(origI1)
+		return win.a, nil
 	}
 	awgI1, genI1Label = origI1, origLabel
 	return account{}, lastErr
@@ -502,26 +536,12 @@ func reportRegI1(origI1 string) {
 	fmt.Fprintln(os.Stderr, errPal.dim(fmt.Sprintf("  reuse it later with: -i1 %q", awgI1)))
 }
 
-const discoveryBarWidth = 28
-
-// A redrawing bar needs a terminal, so plain mode prints one static line and
-// returns no callback.
-func discoveryProgress(what string, total int, plain bool) func(probed int) {
-	label := fmt.Sprintf("probing %s endpoints", what)
-	if plain {
-		fmt.Fprintf(os.Stderr, "  %s...\n", label)
-		return nil
-	}
-	bar := progress.New(progress.WithDefaultGradient(), progress.WithWidth(discoveryBarWidth))
-	return func(probed int) {
-		fmt.Fprintf(os.Stderr, "\r\033[K  %s %s", label, bar.ViewAs(float64(probed)/float64(total)))
-	}
-}
-
 // The handshake is the only reachability test that survives the DPI which
-// forced the tunnel fallback in the first place.
-func registerViaTunnel(ctx context.Context, run protoRun, ips []netip.Addr, timeout time.Duration, onProbe func(probed int), existing account) (account, error) {
-	tn, err := newTunnel(run)
+// forced the tunnel fallback in the first place. One candidate = one tunnel;
+// candidates run concurrently and touch the config globals only under the
+// build lock in buildTunnel.
+func registerViaTunnel(ctx context.Context, run protoRun, ips []netip.Addr, timeout time.Duration, cand i1Candidate, existing account) (account, error) {
+	tn, err := buildTunnel(run, cand)
 	if err != nil {
 		return account{}, err
 	}
@@ -529,12 +549,9 @@ func registerViaTunnel(ctx context.Context, run protoRun, ips []netip.Addr, time
 
 	ctx, cancel := context.WithTimeout(ctx, tunnelDiscoveryBudget)
 	defer cancel()
-	for i, ip := range ips {
+	for _, ip := range ips {
 		if ctx.Err() != nil {
 			break
-		}
-		if onProbe != nil {
-			onProbe(i + 1)
 		}
 		if !tunnelConnect(ctx, tn, ip, timeout) {
 			continue
@@ -546,4 +563,19 @@ func registerViaTunnel(ctx context.Context, run protoRun, ips []netip.Addr, time
 		return mintAccount(ctx, client, existing)
 	}
 	return account{}, fmt.Errorf("no reachable endpoint")
+}
+
+// tunnelConfMu guards the package-level I1 globals while a tunnel bakes them
+// into its UAPI config: parallel candidates must not see each other's chains.
+// The read happens synchronously inside newTunnel, so the lock around the
+// build is enough.
+var tunnelConfMu sync.Mutex
+
+func buildTunnel(run protoRun, cand i1Candidate) (tunnel, error) {
+	tunnelConfMu.Lock()
+	defer tunnelConfMu.Unlock()
+	prevI1, prevLabel := awgI1, genI1Label
+	awgI1, genI1Label = cand.chain, cand.label
+	defer func() { awgI1, genI1Label = prevI1, prevLabel }()
+	return newTunnel(run)
 }
