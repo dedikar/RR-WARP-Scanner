@@ -1,49 +1,28 @@
-# Build output: the IPK and the cross-compiled binary are reproducible from
-# source, and a 12 MB binary in git bloats the history for no gain.
+# Build output.
 build/
 
-# Internal session/harness state (plans written by the coding agent).
+# Router backups and exported accounts: they carry the live WARP account.
+backup/
+*account*.json
+.env
+*.pem
+
+# Local tooling and agent notes.
+tests/
+AGENTS.md
 .zcode/
+.zcodeignore
+.tmp*/
 
-# Scratch space used while debugging on the router.
-.tmp/
-.tmp2/
-.tmp3/
-
-# Compiled Go test binaries and coverage.
+# Go and Python artefacts.
 engine/*.test
 *.out
 coverage.txt
+__pycache__/
+*.pyc
 
-# Router credentials or exported account files, if anyone drops them here.
-# These are gitignored on purpose: this repository is published.
-*.pem
-*account*.json
-rrws-account.json
-.env
-
-# Editor / OS noise.
+# Editor and OS noise.
 *.swp
 *~
 .DS_Store
 Thumbs.db
-
-# Python bytecode from the on-router test scripts.
-__pycache__/
-*.pyc
-
-# Router backups: they hold the live WARP account, which must never be committed.
-# The account is a credential in its own right - anyone with it can use the
-# tunnel and burn the registration.
-backup/router-*/
-
-# Source snapshots duplicate what the git tag already pins (v0.3.1-r38-backup),
-# and 2.7 MB of tarball in history buys nothing the tag does not.
-backup/*.tar.gz
-
-# Harness-generated exclude file: not part of the project.
-.zcodeignore
-
-# Agent working notes: they carry local paths, the router address and the
-# machine layout. Useful across sessions, not something to publish.
-AGENTS.md

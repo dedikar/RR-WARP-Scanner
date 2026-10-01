@@ -56,7 +56,7 @@ func parseEndpointSpec(flagName, spec string) (string, error) {
 
 func dialOuter(ctx context.Context, o options, timeout time.Duration) (*nest, error) {
 	if outerAcct == nil {
-		return nil, fmt.Errorf("%s holds no outer device: run \"rrws register\" again", o.accountPath)
+		return nil, fmt.Errorf("%s holds no outer device: run \"warpscout register\" again", o.accountPath)
 	}
 	endpoint, err := parseEndpointSpec("-through", o.through)
 	if err != nil {
@@ -78,7 +78,7 @@ func dialOuter(ctx context.Context, o options, timeout time.Duration) (*nest, er
 	addr, err := netip.ParseAddr(local)
 	if err != nil {
 		tn.Close()
-		return nil, fmt.Errorf("outer device has no %s address: run \"rrws register\" again", famName(o.ipv6))
+		return nil, fmt.Errorf("outer device has no %s address: run \"warpscout register\" again", famName(o.ipv6))
 	}
 	return &nest{
 		tunnel:   tn,

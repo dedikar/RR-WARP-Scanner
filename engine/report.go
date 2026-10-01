@@ -39,7 +39,7 @@ func newConStyles(r *lipgloss.Renderer) conStyles {
 	}
 }
 
-const projectURL = "https://github.com/dedikar/RR-WARP-Scanner"
+const projectURL = "https://github.com/vernette/warpscout"
 
 const (
 	statusOK = iota
@@ -443,9 +443,15 @@ func writeTornNote(w io.Writer, st conStyles, n int) {
 }
 
 func banner(st conStyles) string {
-	credit := st.dim.Render("Based on ") + st.accent.Render("warpscout") + st.dim.Render(", packaged for RouteRich")
+	heart := "<3"
+	if showEmoji {
+		// U+2764 with VS16 measures as one cell but renders as two, so the box
+		// misaligns - a U+1F49x heart is measured and rendered the same width.
+		heart = "💕"
+	}
+	credit := st.dim.Render("Made with ") + st.fail.Render(heart) + st.dim.Render(" by vernette")
 	return st.box.Render(lipgloss.JoinVertical(lipgloss.Center,
-		st.title.Render("RR WARP Scanner"),
+		st.title.Render("WARPSCOUT"),
 		credit,
 		st.dim.Render(projectURL),
 	))

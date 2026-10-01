@@ -609,20 +609,16 @@ return view.extend({
 			if (n !== wasNarrow) { wasNarrow = n; layoutBanner(); }
 		});
 
-		// The banner is for foreign hardware, so it shows only on an explicit
-		// "not ours". A missing answer (an older backend, a failed call) is not
-		// evidence either way, and showing the vendor banner to a RouteRich owner
-		// because one probe did not run is worse than showing nothing.
-		if (dev && dev.authorized === false) {
+		// The banner is for foreign hardware: show it unless the check positively
+		// says "ours". A failed call must not hide the banner - the routers it
+		// exists for are exactly the ones where the call is most likely to fail.
+		if (dev && dev.authorized !== true) {
 			deviceBanner.style.display = 'flex';
 			if (window.console) {
-				// Which of the three signals fired, and what the OUI check had to
-				// look at - without this the report is "not ours, somehow".
 				console.log('[rrws] foreign device: signals=' +
 					JSON.stringify(dev.signals || {}) +
 					' board=' + JSON.stringify(dev.board_name || '') +
 					' distrib=' + JSON.stringify(dev.distrib_id || '') +
-					' interfaces=' + JSON.stringify(dev.interfaces || []) +
 					' macs=' + JSON.stringify(dev.macs || {}));
 			}
 		}

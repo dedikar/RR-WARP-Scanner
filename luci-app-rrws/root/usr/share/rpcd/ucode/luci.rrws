@@ -321,29 +321,36 @@ function account_status() {
 	};
 }
 
-// RouteRich hardware check, kept from the previous package: physical NICs carry
-// the 24:0F:5E OUI. Informational only - it never blocks the page.
-// Is this a RouteRich router? Answered by three independent signals, any one of
-// which is enough, because each can fail on its own:
-//
-//   - the MAC OUI 24:0F:5E on a physical interface;
-//   - DISTRIB_ID=RouteRich in /etc/openwrt_release;
-//   - board_name containing "routerich".
-//
-// The earlier version relied on the OUI alone and only looked at six hardcoded
-// interface names (br-lan, eth0, lan1..3, eth1). Those names match this router,
-// but a RouteRich board with different naming - lan, wlan0, enp1s0 - would read
-// nothing at all and the page would announce foreign hardware. So the interfaces
-// are now enumerated from /sys/class/net rather than guessed, and a build string
-// that literally says RouteRich counts as well.
+// Is this a RouteRich router? Three independent signals, any one is enough,
+// because each can fail on its own: the MAC OUI 24:0F:5E on a physical
+// interface, DISTRIB_ID=RouteRich, or "routerich" in board_name. Informational
+// only - it never blocks the page.
+
+// One hex digit, or -1 when the character is not hex.
+function hex_digit(ch) {
+	const v = ord(ch);
+	if (v >= ord('0') && v <= ord('9')) return v - ord('0');
+	const lv = ord(lc(ch));
+	if (lv >= ord('a') && lv <= ord('f')) return lv - ord('a') + 10;
+	return -1;
+}
+
+// Locally-administered address: bit 1 of the first octet is set. Such a device
+// is virtual and carries no vendor information.
+function is_local_admin(mac) {
+	if (length(mac) != 17) return false;
+	const hi = hex_digit(substr(mac, 0, 1));
+	const lo = hex_digit(substr(mac, 1, 1));
+	if (hi < 0 || lo < 0) return false;
+	return ((hi * 16 + lo) & 2) != 0;
+}
+
 function device_check() {
 	const RRWS_OUI = '24:0f:5e';
 	const macs = {};
 	let ouiMatch = false;
 
-	// Enumerate what is actually there instead of a fixed list. The directory
-	// exists on every Linux; a failure here is not fatal, the other two signals
-	// still decide.
+	// Enumerate what is actually there instead of guessing interface names.
 	let ifaces = [];
 	try {
 		const listing = command('ls /sys/class/net 2>/dev/null');
@@ -354,21 +361,14 @@ function device_check() {
 		const name = trim(ifaces[i]);
 		if (!length(name)) continue;
 		const mac = trim(read_file('/sys/class/net/' + name + '/address') ?? '');
-		// Tunnel and virtual interfaces report an all-zero address, and some of
-		// them report only four bytes of it ("00:00:00:00" on gre0 and sit0), so
-		// the length is checked instead of comparing to a full zero literal.
-		// They carry no vendor information either way.
+		// Tunnel interfaces report all-zero addresses, some only four bytes long
+		// ("00:00:00:00" on gre0/sit0), so check the length, not a zero literal.
 		if (length(mac) != 17 || mac == '00:00:00:00:00:00') continue;
-		// A locally-administered address (bit 1 of the first octet set) belongs to
-		// a virtual interface, so it can neither confirm nor deny the vendor.
-		const b1 = substr(mac, 1, 1);
-		if (b1 == '2' || b1 == '6' || b1 == 'a' || b1 == 'e') continue;
+		if (is_local_admin(mac)) continue;
 		macs[name] = mac;
 		if (substr(mac, 0, 8) == RRWS_OUI) ouiMatch = true;
 	}
 
-	// The vendor build identifies itself. This is the signal that survives an
-	// unusual interface naming, and the one a plain OpenWrt image will not have.
 	let distribId = '';
 	let distribDesc = '';
 	try {
@@ -385,8 +385,7 @@ function device_check() {
 	let boardName = '';
 	try { boardName = trim(read_file('/tmp/sysinfo/board_name') ?? ''); } catch (e) {}
 
-	// lc(), not lower(): this ucode build has no lower() - calling it throws
-	// "left-hand side is not a function" and would take the whole page down.
+	// lc(), not lower(): this ucode build has no lower() - calling it throws.
 	const idMatch = length(distribId) && lc(distribId) == 'routerich';
 	const boardMatch = length(boardName) && index(lc(boardName), 'routerich') >= 0;
 	const authorized = ouiMatch || idMatch || boardMatch;
@@ -398,8 +397,8 @@ function device_check() {
 			distrib_id: idMatch,
 			board_name: boardMatch,
 		},
-		// Which interfaces were actually examined, so a foreign-router report
-		// shows whether the OUI check had anything to look at.
+		// Which interfaces were examined, so a foreign-router report shows
+		// whether the OUI check had anything to look at.
 		interfaces: ifaces,
 		macs,
 		oui: '24:0F:5E',
