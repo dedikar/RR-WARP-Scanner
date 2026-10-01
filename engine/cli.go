@@ -29,7 +29,7 @@ var commands = []command{
 			"",
 			"Working endpoints are reported grouped per subnet. ENDPOINT PING is the ICMP",
 			"ping to the endpoint address; -tun-ping adds TUN PING, measured inside the tunnel.",
-			"Needs a WARP account: run \"warpscout register\" first.",
+			"Needs a WARP account: run \"rrws register\" first.",
 			"",
 			"-proto masque scans Cloudflare's MASQUE service instead: it has no endpoint",
 			"pools, so the run covers two anycast addresses on a fixed set of ports and",

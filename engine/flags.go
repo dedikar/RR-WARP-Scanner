@@ -692,10 +692,10 @@ func applyDNS(o *options) {
 func rootUsage(w io.Writer) {
 	st := newConStyles(lipgloss.NewRenderer(w))
 
-	fmt.Fprintln(w, st.title.Render("warpscout")+" - find the exit colo and region of Cloudflare WARP endpoints")
+	fmt.Fprintln(w, st.title.Render("rrws")+" - find the exit colo and region of Cloudflare WARP endpoints")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, st.title.Render("Usage:"))
-	fmt.Fprintf(w, "  %s <command> [options]\n", st.accent.Render("warpscout"))
+	fmt.Fprintf(w, "  %s <command> [options]\n", st.accent.Render("rrws"))
 	fmt.Fprintf(w, "\n%s\n", st.title.Render("Commands"))
 
 	col := 0
@@ -707,14 +707,14 @@ func rootUsage(w io.Writer) {
 	for _, c := range commands {
 		fmt.Fprintf(w, "  %s%s%s\n", st.accent.Render(c.name), strings.Repeat(" ", col-len(c.name)+2), c.brief)
 	}
-	fmt.Fprintf(w, "\nRun %s for the options of a command.\n", st.accent.Render("warpscout <command> -h"))
-	fmt.Fprintln(w, "Start with "+st.accent.Render("warpscout register")+" - every other command needs a WARP account.")
+	fmt.Fprintf(w, "\nRun %s for the options of a command.\n", st.accent.Render("rrws <command> -h"))
+	fmt.Fprintln(w, "Start with "+st.accent.Render("rrws register")+" - every other command needs a WARP account.")
 }
 
 func commandUsage(w io.Writer, cmd command, fs *flag.FlagSet) {
 	st := newConStyles(lipgloss.NewRenderer(w))
 
-	fmt.Fprintln(w, st.title.Render("warpscout "+cmd.name)+" - "+cmd.brief)
+	fmt.Fprintln(w, st.title.Render("rrws "+cmd.name)+" - "+cmd.brief)
 	fmt.Fprintln(w)
 	for _, line := range cmd.intro {
 		fmt.Fprintln(w, line)
@@ -725,7 +725,7 @@ func commandUsage(w io.Writer, cmd command, fs *flag.FlagSet) {
 	if len(cmd.groups) == 0 {
 		args = ""
 	}
-	fmt.Fprintf(w, "  %s%s\n", st.accent.Render("warpscout "+cmd.name), args)
+	fmt.Fprintf(w, "  %s%s\n", st.accent.Render("rrws "+cmd.name), args)
 
 	col := flagColumnWidth(cmd.groups)
 	for _, g := range cmd.groups {

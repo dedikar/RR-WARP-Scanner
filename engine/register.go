@@ -29,7 +29,7 @@ const (
 	apiHost         = "api.cloudflareclient.com"
 	cfClientVersion = "a-6.11-2223"
 	cfUserAgent     = "okhttp/3.12.1"
-	defaultAccount  = "warpscout-account.json"
+	defaultAccount  = "rrws-account.json"
 	defaultRelay    = "https://edge-client-api.vercel.app"
 	apiReachTimeout = 3 * time.Second
 	registerTimeout = 15 * time.Second

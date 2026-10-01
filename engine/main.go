@@ -64,12 +64,12 @@ func setupScan(opts options) (protoRun, []netip.Addr, error) {
 func loadScanAccount(path string) error {
 	a, err := loadAccount(path)
 	if err != nil {
-		return fmt.Errorf("no WARP account at %s: run \"warpscout register\" first", path)
+		return fmt.Errorf("no WARP account at %s: run \"rrws register\" first", path)
 	}
 	applyAccount(a)
 	fmt.Fprintln(os.Stderr, errPal.dim(fmt.Sprintf("Using cached WARP account from %s", path)))
 	if a.IPv6 == "" {
-		fmt.Fprintln(os.Stderr, errPal.fail("this account file predates per-device addresses - IPv6 falls back to a constant that Cloudflare drops; run \"warpscout register\" again"))
+		fmt.Fprintln(os.Stderr, errPal.fail("this account file predates per-device addresses - IPv6 falls back to a constant that Cloudflare drops; run \"rrws register\" again"))
 	}
 	fmt.Fprintln(os.Stderr)
 	return nil
@@ -144,7 +144,7 @@ func runFindSNICmd(ctx context.Context, opts options) error {
 		return err
 	}
 	if masqueAcct == nil {
-		return fmt.Errorf("%s holds no MASQUE device: run \"warpscout register\" again", opts.accountPath)
+		return fmt.Errorf("%s holds no MASQUE device: run \"rrws register\" again", opts.accountPath)
 	}
 	return runFindSNI(ctx, opts, run, ips, time.Duration(opts.timeoutSec)*time.Second)
 }
@@ -158,7 +158,7 @@ func runScanCmd(ctx context.Context, opts options) error {
 		return err
 	}
 	if run.isMASQUE() && masqueAcct == nil {
-		return fmt.Errorf("%s holds no MASQUE device: run \"warpscout register\" again", opts.accountPath)
+		return fmt.Errorf("%s holds no MASQUE device: run \"rrws register\" again", opts.accountPath)
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -258,7 +258,7 @@ func runScanCmd(ctx context.Context, opts options) error {
 		return outErr
 	}
 	if reportPath == "" {
-		reportPath = fmt.Sprintf("warpscout-report-%s.txt", time.Now().Format("2006-01-02-150405"))
+		reportPath = fmt.Sprintf("rrws-report-%s.txt", time.Now().Format("2006-01-02-150405"))
 	}
 	if err := writeToFile(reportPath, ph, opts.tunPingCheck); err != nil {
 		fmt.Fprintln(os.Stderr, errPal.fail(fmt.Sprintf("failed to write %s: %v", reportPath, err)))

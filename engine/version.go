@@ -15,11 +15,13 @@ import (
 )
 
 const (
-	ghLatestURL = "https://api.github.com/repos/vernette/warpscout/releases/latest"
+	// Our own repository: the router package has its own release tags, and
+	// polling upstream would compare our version against theirs.
+	ghLatestURL = "https://api.github.com/repos/dedikar/RR-WARP-Scanner/releases/latest"
 
 	updateCheckTimeout = 2 * time.Second
 	updateCacheTTL     = 6 * time.Hour
-	updateCacheName    = "warpscout-latest-version"
+	updateCacheName    = "rrws-latest-version"
 )
 
 // Set through -ldflags "-X main.version=" from the git tag; see VERSIONING.md.
