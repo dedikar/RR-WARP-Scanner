@@ -772,11 +772,10 @@ return view.extend({
 		var tries = 0;
 		var label = btn.textContent;
 
-		// Runs as a task in LuCI's poll queue; every exit path removes it, so a
-		// finished registration never leaves a timer behind.
-		var finish = function() {
-			if (self.regPollHandle) { L.Poll.remove(self.regPollHandle); self.regPollHandle = null; }
-		};
+		// Runs as a task in LuCI's poll queue. L.Poll.add() only answers
+		// true/false and remove() takes the callback FUNCTION - removing a
+		// "handle" throws a TypeError that kills the success transition.
+		var finish = function() { L.Poll.remove(tick); };
 		var tick = function() {
 			// The backend ladder is bounded (~5.5 min worst case); 8 minutes is
 			// only a last-resort cap. The real verdict arrives through
@@ -824,7 +823,7 @@ return view.extend({
 				});
 			}, function() { /* a failed round is retried on the next one */ });
 		};
-		this.regPollHandle = L.Poll.add(tick, 2);
+		L.Poll.add(tick, 2);
 	},
 
 	renderScan: function(s, res0) {
@@ -1236,9 +1235,9 @@ return view.extend({
 		var startedAt = Date.now();
 		var GRACE_MS = 15000;
 
-		// One task in LuCI's poll queue, removed when the run is over.
-		if (this.scanPollHandle) L.Poll.remove(this.scanPollHandle);
-		this.scanPollHandle = L.Poll.add(function() {
+		// One task in LuCI's poll queue, removed when the run is over. remove()
+		// takes the callback function, not a handle (add() only answers bool).
+		var tick = function() {
 			return callScanStatus().then(function(st) {
 				if (!st) return;
 				self.showStatus(st);
@@ -1248,12 +1247,14 @@ return view.extend({
 				var graceOver = (Date.now() - startedAt) > GRACE_MS;
 				if (st.running || (!sawRunning && !graceOver)) return;
 
-				if (self.scanPollHandle) { L.Poll.remove(self.scanPollHandle); self.scanPollHandle = null; }
+				L.Poll.remove(tick);
 				if (self.startBtn) self.startBtn.disabled = false;
 				if (self.stopBtn) self.stopBtn.disabled = true;
 				callScanResult().then(function(r) { self.renderResults(r); });
 			}, function() { /* a failed round is retried on the next one */ });
-		}, 2);
+		};
+		this.scanPollFn = tick;
+		L.Poll.add(tick, 2);
 	},
 
 	showStatus: function(st) {
@@ -1809,10 +1810,9 @@ return view.extend({
 	startLogAutoRefresh: function() {
 		var self = this;
 		// A permanent task in LuCI's poll queue; the gates decide per tick, so
-		// the switches keep working without re-registering anything. The queue
-		// itself is emptied when the page is left.
-		if (this.logPollHandle) L.Poll.remove(this.logPollHandle);
-		this.logPollHandle = L.Poll.add(function() {
+		// the switches keep working without re-registering anything. remove()
+		// takes the callback function, not a handle.
+		var tick = function() {
 			// Only while visible and only when asked: a background tab polling a
 			// 2-core router every 3s is wasted work.
 			if (document.visibilityState === 'visible' &&
@@ -1822,7 +1822,10 @@ return view.extend({
 					self.updateLog(self.logPane, l.merged || '');
 				});
 			}
-		}, 3);
+		};
+		if (this.logPollFn) L.Poll.remove(this.logPollFn);
+		this.logPollFn = tick;
+		L.Poll.add(tick, 3);
 	},
 
 	handleSaveApply: null,
