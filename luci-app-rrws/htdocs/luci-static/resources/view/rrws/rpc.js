@@ -1,4 +1,5 @@
 'use strict';
+'require baseclass';
 'require rpc';
 
 // Transport to luci.rrws. rpc.declare wrappers for the ubus methods, plus a
@@ -107,7 +108,7 @@ var callDeleteAccount = declare({ object: 'luci.rrws', method: 'deleteAccount', 
 var callRegisterLog   = declare({ object: 'luci.rrws', method: 'registerLog', params: {}, reject: false });
 var callApplyBest     = declare({ object: 'luci.rrws', method: 'applyBest', params: { iface: 'iface', endpoint: 'endpoint' }, reject: false });
 
-return {
+return baseclass.extend({
 	declare: declare,
 	ubusCall: ubusCall,
 	callAccountStatus: callAccountStatus,
@@ -127,4 +128,4 @@ return {
 	callDeleteAccount: callDeleteAccount,
 	callRegisterLog: callRegisterLog,
 	callApplyBest: callApplyBest
-};
+});

@@ -1,4 +1,5 @@
 'use strict';
+'require baseclass';
 
 // Page CSS, injected once per browser session.
 
@@ -132,6 +133,6 @@ function injectPageCss() {
 	document.head.appendChild(el);
 }
 
-return {
+return baseclass.extend({
 	injectPageCss: injectPageCss
-};
+});

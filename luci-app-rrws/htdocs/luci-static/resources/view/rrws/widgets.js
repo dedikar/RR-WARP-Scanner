@@ -1,4 +1,5 @@
 'use strict';
+'require baseclass';
 
 // Collapsible checkbox list and checkbox-label helpers shared by the scan
 // form and the log controls.
@@ -72,8 +73,8 @@ function chkLabel(box, text) {
 	return l;
 }
 
-return {
+return baseclass.extend({
 	mkCheckList: mkCheckList,
 	checkListValues: checkListValues,
 	chkLabel: chkLabel
-};
+});

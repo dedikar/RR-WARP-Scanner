@@ -1,4 +1,5 @@
 'use strict';
+'require baseclass';
 
 // Formatting and small builders shared by the account table and the result
 // cards: .conf generation, copy-to-clipboard, coloured metrics, Telegram badge.
@@ -126,7 +127,7 @@ function metric(label, value, color) {
 	return frag;
 }
 
-return {
+return baseclass.extend({
 	setConf: setConf,
 	copyText: copyText,
 	makeConf: makeConf,
@@ -136,4 +137,4 @@ return {
 	tgColor: tgColor,
 	metric: metric,
 	NODE_COLOR: NODE_COLOR
-};
+});

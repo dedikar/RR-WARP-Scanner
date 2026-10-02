@@ -1,4 +1,5 @@
 'use strict';
+'require baseclass';
 'require ui';
 'require view.rrws.format as fmt';
 'require view.rrws.rpc as rrwsRpc';
@@ -415,6 +416,6 @@ function renderResults(view, res) {
 	renderCards();
 }
 
-return {
+return baseclass.extend({
 	renderResults: renderResults
-};
+});
