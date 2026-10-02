@@ -859,6 +859,17 @@ function scan_result(req) {
 	};
 }
 
+// Drop both result copies: the fresh one in /tmp and the persistent one in
+// /etc. Refused while a scan is running - the engine writes into RESULT.
+function scan_result_clear() {
+	if (scan_running())
+		return { error: 'scan is running - stop it first' };
+	try { unlink(RESULT); } catch (e) {}
+	try { unlink(RESULT_SAVED); } catch (e) {}
+	rpclog('results cleared');
+	return { cleared: true };
+}
+
 // Both logs carry the same "YYYY-MM-DD HH:MM:SS" prefix: the engine writes it
 function merge_logs(sources) {
 	const rows = [];
@@ -1065,6 +1076,9 @@ const methods = {
 	scanResult: {
 		args: { page: '' },
 		call: function(req) { return scan_result(req); }
+	},
+	scanResultClear: {
+		call: function() { return scan_result_clear(); }
 	},
 	scanLog: {
 		call: function() { return scan_log(); }

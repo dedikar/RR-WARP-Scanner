@@ -1274,6 +1274,18 @@ return view.extend({
 				setTimeout(function() { URL.revokeObjectURL(a.href); }, 2000);
 			});
 			head.appendChild(dlBtn);
+
+			// Destructive, so one confirmation guards it: a misclick must not
+			// wipe a full-pool result worth 1.5MB of scanning time.
+			var delBtn = E('button', { 'class': 'btn cbi-button cbi-button-remove', style: 'margin-left:8px' }, 'Удалить результаты');
+			delBtn.addEventListener('click', function() {
+				if (!window.confirm('Удалить все результаты скана?'))
+					return;
+				ubusCall('luci.rrws', 'scanResultClear', {}).then(function() {
+					self.renderResults({ endpoints: [] });
+				});
+			});
+			head.appendChild(delBtn);
 		}
 		// Sort keys offered as buttons under the summary line.
 		var SORTS = [
