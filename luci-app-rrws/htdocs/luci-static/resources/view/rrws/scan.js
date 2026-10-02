@@ -1263,6 +1263,9 @@ return view.extend({
 		head.appendChild(left);
 
 		if (list.length) {
+			// Both result actions live in one right-side group: the head is
+			// space-between, so bare children would spread across the whole row.
+			var actions = E('div', { style: 'display:flex;align-items:center;gap:8px' });
 			var dlBtn = E('button', { 'class': 'btn cbi-button' }, 'Скачать всё .txt');
 			dlBtn.addEventListener('click',function() {
 				var txt = list.map(function(r) { return makeConf(r.endpoint); }).join('\n');
@@ -1273,11 +1276,11 @@ return view.extend({
 				a.click();
 				setTimeout(function() { URL.revokeObjectURL(a.href); }, 2000);
 			});
-			head.appendChild(dlBtn);
+			actions.appendChild(dlBtn);
 
 			// Destructive, so one confirmation guards it: a misclick must not
 			// wipe a full-pool result worth 1.5MB of scanning time.
-			var delBtn = E('button', { 'class': 'btn cbi-button cbi-button-remove', style: 'margin-left:8px' }, 'Удалить результаты');
+			var delBtn = E('button', { 'class': 'btn cbi-button cbi-button-remove' }, 'Удалить результаты');
 			delBtn.addEventListener('click', function() {
 				if (!window.confirm('Удалить все результаты скана?'))
 					return;
@@ -1285,7 +1288,8 @@ return view.extend({
 					self.renderResults({ endpoints: [] });
 				});
 			});
-			head.appendChild(delBtn);
+			actions.appendChild(delBtn);
+			head.appendChild(actions);
 		}
 		// Sort keys offered as buttons under the summary line.
 		var SORTS = [
