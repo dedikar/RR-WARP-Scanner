@@ -1268,7 +1268,12 @@ return view.extend({
 			var actions = E('div', { style: 'display:flex;align-items:center;gap:8px' });
 			var dlBtn = E('button', { 'class': 'btn cbi-button' }, 'Скачать всё .txt');
 			dlBtn.addEventListener('click',function() {
-				var txt = list.map(function(r) { return makeConf(r.endpoint); }).join('\n');
+				// A blank line plus a numbered header between configs: glued
+				// back-to-back they read as one cut-off config in an editor.
+				// '#' comments are legal in wg-format files.
+				var txt = list.map(function(r, i) {
+					return '# ' + (i + 1) + ': ' + r.endpoint + '\n' + makeConf(r.endpoint);
+				}).join('\n\n');
 				var blob = new Blob([txt], { type: 'text/plain' });
 				var a = document.createElement('a');
 				a.href = URL.createObjectURL(blob);
