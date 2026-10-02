@@ -101,7 +101,7 @@ const DEFAULTS = {
 	hosts: 500,
 	timeout: 3,
 	jobs: 64,
-	sample: 100,
+	sample: 25,
 	proto: 'awg',
 	tg: 1,
 	// Off by default: -tg already puts Telegram-capable endpoints first, and
