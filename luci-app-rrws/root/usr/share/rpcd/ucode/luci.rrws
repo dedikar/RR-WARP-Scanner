@@ -660,13 +660,17 @@ function scan_start(req) {
 	try { unlink(PROGRESS); } catch (e) {}
 	writefile(PROGRESS, 'starting\n');
 	writefile(SCAN_ID, stamp());
+	// The engine redirects with >> (append): a mid-run log clear truncates the
+	// file, and an append writer continues at the new EOF instead of punching
+	// a hole at its stale offset. The reset lives here, where no one writes.
+	writefile(LOG, '');
 
 	let argv = build_scan_args(s);
 	// The "scan" subcommand is mandatory - the engine dispatches on argv[1] and
 	// answers "unknown command "-a"" without it.
 	let cmd = BIN + ' scan';
 	for (let i = 0; i < length(argv); i++) cmd += ' ' + shellquote(argv[i]);
-	cmd += ' > ' + RESULT + ' 2> ' + LOG;
+	cmd += ' > ' + RESULT + ' 2>> ' + LOG;
 
 	// setsid + immediate return: a LuCI rpc request dies at ~20s, and a scan is
 	const runner = 'setsid sh -c ' + shellquote('echo $$ > ' + PIDFILE + '; exec ' + cmd) +
@@ -883,7 +887,12 @@ function merge_logs(sources) {
 	};
 
 	const collect = function(text, tag) {
-		const src = split(text ?? '', '\n');
+		// Defence against a sparse read: a file truncated while a writer held it
+		// comes back with NUL padding, which would print as one garbage row.
+		const zero = split(text ?? '', '\x00');
+		let clean = '';
+		for (let i = 0; i < length(zero); i++) clean += zero[i];
+		const src = split(clean, '\n');
 		for (let i = 0; i < length(src); i++) {
 			const raw = rtrim(src[i], '\r');
 			if (!length(trim(raw))) continue;
@@ -934,6 +943,8 @@ function scan_log() {
 }
 
 function scan_log_clear() {
+	// Safe mid-run: both writers hold append-mode fds, so truncation is a
+	// clean reset and the next line lands at the new EOF.
 	try { writefile(LOG, ''); } catch (e) {}
 	try { writefile(RPC_LOG, ''); } catch (e) {}
 	try { writefile(REG_LOG, ''); } catch (e) {}
@@ -960,10 +971,13 @@ function register_start(renew) {
 	let extra = renew ? ' --fresh' : '';
 	// The ladder script owns the attempt order (standard, then zeroblock, then
 	// opera-proxy); its output and the engine output land in REG_LOG.
-	const cmd = LADDER + extra + ' > ' + REG_LOG + ' 2>&1';
+	// >> for the same reason as the scan log: scan_log_clear must not leave a
+	// sparse file behind a live registration.
+	const cmd = LADDER + extra + ' >> ' + REG_LOG + ' 2>&1';
 	// Same $! pid capture as scan_start: register_running() reads this pidfile to
 	// tell a live registration from a stale marker.
 	try { unlink(PIDFILE); } catch (e) {}
+	writefile(REG_LOG, '');
 	command('setsid sh -c ' + shellquote('echo $$ > ' + PIDFILE + '; exec ' + cmd) +
 		' < /dev/null > /dev/null 2>&1 &');
 	writefile(REG_MARK, '1');
