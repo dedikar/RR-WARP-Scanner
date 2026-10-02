@@ -79,7 +79,29 @@ function callSaveSettings(opts) {
 var callScanStart     = declare({ object: 'luci.rrws', method: 'scanStart', params: {}, reject: false });
 var callScanStop      = declare({ object: 'luci.rrws', method: 'scanStop', params: {}, reject: false });
 var callScanStatus    = declare({ object: 'luci.rrws', method: 'scanStatus', params: {}, reject: false });
-var callScanResult    = declare({ object: 'luci.rrws', method: 'scanResult', params: {}, reject: false });
+// scanResult travels in pages: a full-pool run is ~1.5MB of JSON and the ubus
+// reply path times out on replies that big. Page 1 carries the run summary;
+// the endpoints of every page are stitched back together here.
+var callScanResult    = function() {
+	return ubusCall('luci.rrws', 'scanResult', { page: '1' }).then(function(first) {
+		var pages = first.pages || 1;
+		var acc = first;
+		var eps = first.endpoints || [];
+		var next = function() {
+			p++;
+			if (p > pages) {
+				acc.endpoints = eps;
+				return acc;
+			}
+			return ubusCall('luci.rrws', 'scanResult', { page: String(p) }).then(function(r) {
+				eps = eps.concat(r.endpoints || []);
+				return next();
+			});
+		};
+		var p = 1;
+		return next();
+	});
+};
 var callScanLog       = declare({ object: 'luci.rrws', method: 'scanLog', params: {}, reject: false });
 var callScanLogClear  = declare({ object: 'luci.rrws', method: 'scanLogClear', params: {}, reject: false });
 var callRegister      = declare({ object: 'luci.rrws', method: 'register', params: {}, reject: false });

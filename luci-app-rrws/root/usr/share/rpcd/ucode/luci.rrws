@@ -790,14 +790,16 @@ function scan_status() {
 	};
 }
 
-function scan_result() {
-	// Prefer a fresh result (even an empty one: "found nothing" is an answer);
-	// fall back to the last saved run only when nothing has run since boot.
-	const hasFresh = file_exists(RESULT);
+function scan_result(req) {
+	// Prefer a fresh result - but only one with content. A scan that was
+	// stopped or killed leaves a zero-byte RESULT behind, and reading that as
+	// "found nothing" hid the whole saved list behind an empty answer.
+	const freshStat = file_exists(RESULT) ? stat(RESULT) : null;
+	const hasFresh = freshStat != null && freshStat.size > 0;
 	const src = hasFresh ? RESULT : RESULT_SAVED;
 	const d = read_json_file(src);
 	if (!d)
-		return { endpoints: [], updated: 0, saved: false };
+		return { endpoints: [], updated: 0, saved: false, page: 1, pages: 1 };
 	let st = null;
 	try { st = stat(src); } catch (e) {}
 
@@ -824,8 +826,22 @@ function scan_result() {
 		if (eps[i].tg_ok) tg++;
 	}
 
+	// The ubus reply has a size ceiling: a full-pool result (3582 rows with the
+	// full conf data) is 1.5MB and the call times out instead of returning.
+	// So the rows travel in pages of 1200 (~500KB, a size proven to pass) and
+	// the page stitches them back together.
+	const page_size = 1200;
+	const total_rows = length(eps);
+	const pages = int((total_rows + page_size - 1) / page_size);
+	let page = to_int(req?.args?.page, 1);
+	if (page < 1 || page > pages) page = 1;
+	const from = (page - 1) * page_size;
+	let slice = [];
+	for (let i = from; i < from + page_size && i < total_rows; i++)
+		push(slice, eps[i]);
+
 	return {
-		endpoints: eps,
+		endpoints: slice,
 		working: working,
 		probed: d.probed ?? 0,
 		tg_working: tg,
@@ -837,6 +853,9 @@ function scan_result() {
 		stable_only: s.stable_only ? 1 : 0,
 		updated: st ? st.mtime : 0,
 		saved: !hasFresh,
+		page: page,
+		pages: pages,
+		total_rows: total_rows,
 	};
 }
 
@@ -1044,7 +1063,8 @@ const methods = {
 		call: function() { return scan_status(); }
 	},
 	scanResult: {
-		call: function() { return scan_result(); }
+		args: { page: '' },
+		call: function(req) { return scan_result(req); }
 	},
 	scanLog: {
 		call: function() { return scan_log(); }
